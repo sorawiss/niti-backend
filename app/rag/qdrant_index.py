@@ -27,7 +27,6 @@ def get_qdrant_client() -> QdrantClient:
     return QdrantClient(
         url=url,
         api_key=api_key,
-        cloud_inference=True,
     )
 
 
