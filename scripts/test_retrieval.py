@@ -19,6 +19,5 @@ for query in test_queries:
     for result in results:
         print("Score:", result["score"])
         print("Section:", result["metadata"].get("section"))
-        print("Topic:", result["metadata"].get("topic"))
-        print("Text:", result["text"][:300])
+        print("Text:", result["text"])
         print("-" * 50)

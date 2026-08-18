@@ -31,21 +31,11 @@ def get_index() -> VectorStoreIndex:
 def retrieve_laws(
     query: str,
     top_k: int = 5,
-    topic: str | None = None,
     law_name: str | None = None,
 ) -> list[dict[str, Any]]:
     index = get_index()
 
     filters_list: list[MetadataFilter] = []
-
-    if topic:
-        filters_list.append(
-            MetadataFilter(
-                key="topic",
-                value=topic,
-                operator=FilterOperator.EQ,
-            )
-        )
 
     if law_name:
         filters_list.append(

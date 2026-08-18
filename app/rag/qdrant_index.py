@@ -14,7 +14,7 @@ load_dotenv()
 
 COLLECTION_NAME = "thai_labor_law"
 DEFAULT_CHUNKS_DIR = Path("data/law-chunks")
-REQUIRED_FIELDS = ("law_name", "section", "topic", "text")
+REQUIRED_FIELDS = ("law_name", "section", "text")
 
 
 def get_qdrant_client() -> QdrantClient:
@@ -36,20 +36,28 @@ def load_chunks(chunks_dir: Path = DEFAULT_CHUNKS_DIR) -> list[dict[str, Any]]:
 
     chunks: list[dict[str, Any]] = []
 
-    for file_path in sorted(chunks_dir.glob("*.json")):
+    for file_path in sorted(chunks_dir.glob("*.jsonl")):
         with file_path.open("r", encoding="utf-8") as file:
-            chunk = json.load(file)
+            for line_number, line in enumerate(file, start=1):
+                line = line.strip()
+                if not line:
+                    continue
 
-        missing_fields = [field for field in REQUIRED_FIELDS if not chunk.get(field)]
-        if missing_fields:
-            missing = ", ".join(missing_fields)
-            raise ValueError(f"{file_path} is missing required fields: {missing}")
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"Invalid JSON at {file_path}:{line_number} - {e}")
 
-        chunk["source_file"] = file_path.name
-        chunks.append(chunk)
+                missing_fields = [field for field in REQUIRED_FIELDS if not chunk.get(field)]
+                if missing_fields:
+                    missing = ", ".join(missing_fields)
+                    raise ValueError(f"{file_path}:{line_number} is missing required fields: {missing}")
+
+                chunk["source_file"] = file_path.name
+                chunks.append(chunk)
 
     if not chunks:
-        raise ValueError(f"No JSON chunks found in {chunks_dir}")
+        raise ValueError(f"No JSONL chunks found in {chunks_dir}")
 
     return chunks
 
@@ -68,7 +76,6 @@ def build_index(chunks: list[dict[str, Any]]) -> VectorStoreIndex:
             metadata={
                 "law_name": chunk["law_name"],
                 "section": chunk["section"],
-                "topic": chunk["topic"],
                 "source_file": chunk.get("source_file"),
             },
         )
