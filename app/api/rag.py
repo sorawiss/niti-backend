@@ -24,10 +24,6 @@ class RetrieveRequest(BaseModel):
         le=20,
         description="Number of law chunks to retrieve",
     )
-    topic: str | None = Field(
-        default=None,
-        description="Optional legal topic metadata filter",
-    )
     law_name: str | None = Field(
         default=None,
         description="Optional law name metadata filter",
@@ -51,7 +47,6 @@ def retrieve(request: RetrieveRequest) -> RetrieveResponse:
         results = retrieve_laws(
             query=request.query,
             top_k=request.top_k,
-            topic=request.topic,
             law_name=request.law_name,
         )
 
