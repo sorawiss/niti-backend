@@ -14,6 +14,26 @@ class ReviewInputError(ValueError):
 class ReviewPlanningError(Exception):
     """The model response does not constitute a complete, valid review plan."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        response: LLMResponse | None = None,
+        plan: ReviewPlan | None = None,
+        max_queries: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        # Available to an explicit local diagnostic tool; never automatically logged.
+        self.response = response
+        self.plan = plan
+        self.max_queries = max_queries
+
+    @property
+    def query_count(self) -> int | None:
+        if self.plan is None:
+            return None
+        return sum(len(topic.queries) for topic in self.plan.topics)
+
 
 def validate_plan(
     document: ParsedDocument, plan: ReviewPlan, *, max_queries: int = 32
@@ -83,11 +103,20 @@ class ReviewPlanner:
                 },
             )
         )
-        if response.finish_reason not in (None, "stop"):
-            raise ReviewPlanningError("Planner response did not finish normally")
+        plan: ReviewPlan | None = None
         try:
+            if response.finish_reason not in (None, "stop"):
+                raise ReviewPlanningError("Planner response did not finish normally")
             plan = ReviewPlan.model_validate_json(response.content)
+            validate_plan(document, plan, max_queries=self._max_queries)
         except ValidationError as error:
-            raise ReviewPlanningError("Invalid review plan JSON or schema") from error
-        validate_plan(document, plan, max_queries=self._max_queries)
+            raise ReviewPlanningError(
+                "Invalid review plan JSON or schema",
+                response=response,
+                max_queries=self._max_queries,
+            ) from error
+        except ReviewPlanningError as error:
+            raise ReviewPlanningError(
+                str(error), response=response, plan=plan, max_queries=self._max_queries
+            ) from error
         return plan, response

@@ -5,6 +5,56 @@ an inspectable source registry. It does not issue legal findings or proposed
 amendments. The review API, legal analysis, and LangGraph wiring belong to PR2.
 Existing `/chat` and `/documents/upload` behavior is unchanged.
 
+## Run a DOCX and inspect each stage
+
+From the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m scripts.try_review_preparation
+```
+
+This uses `docs/Thai_Employment_Contract_Mock.docx` by default. A different input
+and a new output directory can be supplied explicitly:
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m scripts.try_review_preparation "C:\contracts\example.docx" --output-dir tmp/example-run
+```
+
+The command uses live LLM and existing RAG services configured by the project's
+`.env`. It makes one planning request with the current prompt and validation
+limits, and does not retry. Retrieval runs sequentially to avoid concurrent cold
+loading of the embedding model. `--top-k` defaults to five.
+
+Each default run gets a unique folder under `tmp/review-preparation/` (the folder
+name uses UTC). Explicit output directories must not exist; previous results are
+never overwritten. Files are written as UTF-8:
+
+| File | Contents |
+| --- | --- |
+| `document.json` | Parsed contract blocks, saved before the planning call |
+| `planner-response.json` | Raw model output plus model, finish reason, and usage |
+| `plan.json` | Accepted plan, saved before retrieval |
+| `rejected-plan.json` | Schema-valid plan that failed workflow validation |
+| `result.json` | Full preparation result, including partial retrieval results |
+| `run.json` | Completion summary or failure stage and diagnostic details |
+
+For a rejected plan, `run.json` includes the rejection reason, query count when
+the plan passed schema validation, and configured query limit. Malformed JSON,
+schema failures, and abnormal finish reasons retain the raw response; their
+query count is `null`, because no valid plan could be constructed. Such output
+is diagnostic evidence only and is never passed to retrieval. Gateway errors
+retain error codes, not upstream exception messages or credentials. Diagnostics
+can contain the contract and model-generated text and remain local under the
+git-ignored `tmp/` directory by default.
+
+Exit codes: `0` = preparation ready; `2` = partial retrieval result saved;
+`1` = failure. A `ready` result does not establish legal relevance or compliance.
+
+`ReviewPlanningError` now carries the rejected `plan` (when schema-valid), raw
+`response`, `max_queries`, and a computed `query_count`. This allows this explicit
+diagnostic script to save failures without adding logging or file writes to the
+planner itself. Existing prompts, validation rules, and API behavior are unchanged.
+
 ## Use
 
 ```python
