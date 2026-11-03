@@ -36,7 +36,7 @@ def load_chunks(chunks_dir: Path = DEFAULT_CHUNKS_DIR) -> list[dict[str, Any]]:
 
     chunks: list[dict[str, Any]] = []
 
-    for file_path in sorted(chunks_dir.glob("*.jsonl")):
+    for file_path in sorted(chunks_dir.rglob("*.jsonl")):
         with file_path.open("r", encoding="utf-8") as file:
             for line_number, line in enumerate(file, start=1):
                 line = line.strip()
@@ -53,7 +53,7 @@ def load_chunks(chunks_dir: Path = DEFAULT_CHUNKS_DIR) -> list[dict[str, Any]]:
                     missing = ", ".join(missing_fields)
                     raise ValueError(f"{file_path}:{line_number} is missing required fields: {missing}")
 
-                chunk["source_file"] = file_path.name
+                chunk["source_file"] = file_path.relative_to(chunks_dir).as_posix()
                 chunks.append(chunk)
 
     if not chunks:
