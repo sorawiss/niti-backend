@@ -14,7 +14,10 @@ if str(PROJECT_ROOT) not in sys.path:
 from app.documents.models import ParsedDocument  # noqa: E402
 from app.documents.parser import parse_docx  # noqa: E402
 from app.llm.factory import create_llm_gateway  # noqa: E402
-from app.reviews.review_models import ReviewRunStatus  # noqa: E402
+from app.reviews.review_models import (  # noqa: E402
+    ClauseReviewDiagnostic,
+    ReviewRunStatus,
+)
 from app.reviews.reviewer import ClauseReviewService  # noqa: E402
 from app.reviews.service import ClauseRetrievalService  # noqa: E402
 
@@ -51,6 +54,7 @@ async def run(args: argparse.Namespace) -> int:
     )
     gateway = create_llm_gateway()
     output_dir.mkdir(parents=True)
+    diagnostics: list[ClauseReviewDiagnostic] = []
     try:
         retrieval_service = ClauseRetrievalService(
             max_concurrency=args.retrieval_concurrency,
@@ -61,6 +65,7 @@ async def run(args: argparse.Namespace) -> int:
             gateway,
             max_concurrency=args.review_concurrency,
             max_output_tokens=args.max_output_tokens,
+            diagnostic_callback=diagnostics.append,
         )
         review = await review_service.review(preparation)
     finally:
@@ -72,6 +77,16 @@ async def run(args: argparse.Namespace) -> int:
         preparation.model_dump(mode="json"),
     )
     _write_json(output_dir / "review.json", review.model_dump(mode="json"))
+    _write_json(
+        output_dir / "llm-debug.json",
+        [
+            diagnostic.model_dump(mode="json")
+            for diagnostic in sorted(
+                diagnostics,
+                key=lambda item: item.clause_id,
+            )
+        ],
+    )
     _write_json(
         output_dir / "run.json",
         {

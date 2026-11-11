@@ -16,8 +16,15 @@ from app.reviews.models import (
     RetrievedLegalSource,
     RetrievalStatus,
 )
-from app.reviews.review_models import ClauseReviewStatus, ReviewRunStatus
+from app.reviews.review_models import (
+    ClauseReviewStatus,
+    LegalAssessmentOutcome,
+    ReviewRunStatus,
+)
 from app.reviews.reviewer import ClauseReviewService
+
+
+CLAUSE_TEXT = "Employee must work overtime whenever the employer requires."
 
 
 class FakeGateway(LLMGateway):
@@ -34,6 +41,8 @@ class FakeGateway(LLMGateway):
             content=outcome,
             model="test/model",
             provider="test-provider",
+            finish_reason="stop",
+            request_id="test-request-1",
             usage=LLMUsage(
                 prompt_tokens=100,
                 completion_tokens=30,
@@ -46,17 +55,17 @@ class FakeGateway(LLMGateway):
 def make_clause_result(
     clause_id: str = "clause-0001",
     *,
-    text: str = "ลูกจ้างตกลงทำงานล่วงเวลาตามที่นายจ้างกำหนด",
+    text: str = CLAUSE_TEXT,
     with_source: bool = True,
 ) -> ClauseRetrievalResult:
     clause = ContractClause(
         clause_id=clause_id,
         order=0,
         number="1",
-        title="การทำงานล่วงเวลา",
+        title="Overtime",
         text=text,
         block_indices=[1],
-        section_path=["การทำงานล่วงเวลา"],
+        section_path=["Overtime"],
         boundary_reason=BoundaryReason.NUMBERED_CLAUSE,
     )
     query = ClauseQuery(
@@ -67,9 +76,9 @@ def make_clause_result(
     )
     source = RetrievedLegalSource(
         source_id="law:overtime",
-        law_name="พระราชบัญญัติคุ้มครองแรงงาน พ.ศ. 2541",
-        section="มาตรา 24",
-        text="การทำงานล่วงเวลาต้องได้รับความยินยอมจากลูกจ้างก่อนเป็นคราว ๆ ไป",
+        law_name="Labor Protection Act",
+        section="Section 24",
+        text="Overtime generally requires the employee's prior consent.",
         source_file="labor-law.jsonl",
         best_score=0.9,
         best_rank=1,
@@ -91,7 +100,9 @@ def make_clause_result(
         ],
         sources=[source] if with_source else [],
         status=(
-            RetrievalStatus.READY if with_source else RetrievalStatus.NO_RESULTS
+            RetrievalStatus.READY
+            if with_source
+            else RetrievalStatus.NO_RESULTS
         ),
     )
 
@@ -125,81 +136,211 @@ def make_preparation(
     )
 
 
-def potential_violation_json(
-    clause_id: str = "clause-0001",
+def assessment(
+    assessment_id: str,
+    outcome: str,
     *,
     source_id: str = "law:overtime",
-    excerpt: str = "ลูกจ้างตกลงทำงานล่วงเวลาตามที่นายจ้างกำหนด",
+) -> dict[str, object]:
+    if outcome == "potential_violation":
+        evidence_gap = None
+        suggested_revision = "Require prior consent for each overtime period."
+        citations = [{"source_id": source_id}]
+    elif outcome == "compliant":
+        evidence_gap = None
+        suggested_revision = None
+        citations = [{"source_id": source_id}]
+    else:
+        evidence_gap = "The retrieved evidence does not cover the exception."
+        suggested_revision = None
+        citations = [{"source_id": source_id}]
+
+    return {
+        "assessment_id": assessment_id,
+        "outcome": outcome,
+        "issue": f"{outcome} issue",
+        "reasoning": f"Reasoning for {outcome}.",
+        "citations": citations,
+        "evidence_gap": evidence_gap,
+        "suggested_revision": suggested_revision,
+        "confidence": "high",
+    }
+
+
+def review_json(
+    assessments: list[dict[str, object]],
+    *,
+    clause_id: str = "clause-0001",
+    applicable: bool = True,
 ) -> str:
     return json.dumps(
         {
             "clause_id": clause_id,
-            "status": "potential_violation",
-            "findings": [
-                {
-                    "finding_id": "finding-01",
-                    "contract_excerpt": excerpt,
-                    "issue": "ขาดเงื่อนไขเรื่องความยินยอม",
-                    "reasoning": "หลักฐานกำหนดให้ได้รับความยินยอมก่อน",
-                    "citations": [{"source_id": source_id}],
-                    "suggested_revision": (
-                        "การทำงานล่วงเวลาต้องได้รับความยินยอมก่อนเป็นคราว ๆ ไป"
-                    ),
-                    "confidence": "high",
-                }
-            ],
-            "evidence_gap": None,
-        },
-        ensure_ascii=False,
+            "applicable": applicable,
+            "applicability_reason": (
+                "The clause contains an employment term."
+                if applicable
+                else "The text has no substantive employment term."
+            ),
+            "assessments": assessments,
+        }
     )
 
 
 class ClauseReviewServiceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_valid_finding_is_enriched_with_retrieved_citation(self) -> None:
-        gateway = FakeGateway([potential_violation_json()])
-        service = ClauseReviewService(gateway)
+    async def test_valid_assessment_is_enriched_with_retrieved_citation(
+        self,
+    ) -> None:
+        raw = review_json([assessment("assessment-01", "potential_violation")])
+        diagnostics = []
+        gateway = FakeGateway([raw])
+        service = ClauseReviewService(
+            gateway,
+            diagnostic_callback=diagnostics.append,
+        )
 
         result = await service.review(make_preparation([make_clause_result()]))
 
         self.assertEqual(result.status, ReviewRunStatus.READY)
         review = result.clause_reviews[0]
         self.assertEqual(review.status, ClauseReviewStatus.POTENTIAL_VIOLATION)
-        self.assertEqual(review.findings[0].citations[0].section, "มาตรา 24")
-        self.assertEqual(review.findings[0].citations[0].source_id, "law:overtime")
+        self.assertEqual(
+            review.assessments[0].citations[0].section,
+            "Section 24",
+        )
+        self.assertEqual(
+            review.assessments[0].citations[0].source_id,
+            "law:overtime",
+        )
+        self.assertEqual(review.clause.clause_id, "clause-0001")
+        self.assertNotIn(
+            "contract_excerpt",
+            review.assessments[0].model_dump(),
+        )
         self.assertEqual(review.usage.total_tokens, 130)
-        self.assertEqual(result.summary.finding_count, 1)
+        self.assertEqual(result.summary.assessment_count, 1)
+        self.assertEqual(
+            result.summary.potential_violation_assessment_count,
+            1,
+        )
+        self.assertEqual(len(diagnostics), 1)
+        self.assertTrue(diagnostics[0].accepted)
+        self.assertEqual(diagnostics[0].raw_model_output, raw)
+        self.assertEqual(diagnostics[0].finish_reason, "stop")
+        self.assertEqual(diagnostics[0].request_id, "test-request-1")
         self.assertEqual(
             gateway.requests[0].response_format["type"],
             "json_schema",
         )
+        assessment_schema = gateway.requests[0].response_format["json_schema"][
+            "schema"
+        ]["$defs"]["GeneratedLegalAssessment"]
+        self.assertNotIn("contract_excerpt", assessment_schema["properties"])
         self.assertIn("LEGAL_SOURCES", gateway.requests[0].messages[1].content)
+
+    async def test_compliant_assessment_is_retained_for_no_issue_clause(
+        self,
+    ) -> None:
+        gateway = FakeGateway(
+            [review_json([assessment("assessment-01", "compliant")])]
+        )
+
+        result = await ClauseReviewService(gateway).review(
+            make_preparation([make_clause_result()])
+        )
+
+        review = result.clause_reviews[0]
+        self.assertEqual(review.status, ClauseReviewStatus.NO_ISSUE_FOUND)
+        self.assertEqual(len(review.assessments), 1)
+        self.assertEqual(
+            review.assessments[0].outcome,
+            LegalAssessmentOutcome.COMPLIANT,
+        )
+        self.assertEqual(result.summary.compliant_assessment_count, 1)
+
+    async def test_mixed_assessments_derive_needs_more_evidence_status(
+        self,
+    ) -> None:
+        gateway = FakeGateway(
+            [
+                review_json(
+                    [
+                        assessment("assessment-01", "compliant"),
+                        assessment("assessment-02", "needs_more_evidence"),
+                    ]
+                )
+            ]
+        )
+
+        result = await ClauseReviewService(gateway).review(
+            make_preparation([make_clause_result()])
+        )
+
+        review = result.clause_reviews[0]
+        self.assertEqual(
+            review.status,
+            ClauseReviewStatus.NEEDS_MORE_EVIDENCE,
+        )
+        self.assertEqual(len(review.assessments), 2)
+        self.assertIn("does not cover", review.evidence_gap)
+
+    async def test_violation_has_priority_in_derived_clause_status(self) -> None:
+        gateway = FakeGateway(
+            [
+                review_json(
+                    [
+                        assessment("assessment-01", "needs_more_evidence"),
+                        assessment("assessment-02", "potential_violation"),
+                    ]
+                )
+            ]
+        )
+
+        result = await ClauseReviewService(gateway).review(
+            make_preparation([make_clause_result()])
+        )
+
+        self.assertEqual(
+            result.clause_reviews[0].status,
+            ClauseReviewStatus.POTENTIAL_VIOLATION,
+        )
+        self.assertEqual(len(result.clause_reviews[0].assessments), 2)
+
+    async def test_not_applicable_clause_has_no_assessments(self) -> None:
+        gateway = FakeGateway([review_json([], applicable=False)])
+
+        result = await ClauseReviewService(gateway).review(
+            make_preparation([make_clause_result()])
+        )
+
+        review = result.clause_reviews[0]
+        self.assertEqual(review.status, ClauseReviewStatus.NOT_APPLICABLE)
+        self.assertEqual(review.assessments, [])
 
     async def test_unknown_citation_rejects_complete_clause_response(self) -> None:
         gateway = FakeGateway(
-            [potential_violation_json(source_id="law:invented")]
+            [
+                review_json(
+                    [
+                        assessment(
+                            "assessment-01",
+                            "potential_violation",
+                            source_id="law:invented",
+                        )
+                    ]
+                )
+            ]
         )
-        service = ClauseReviewService(gateway)
 
-        result = await service.review(make_preparation([make_clause_result()]))
+        result = await ClauseReviewService(gateway).review(
+            make_preparation([make_clause_result()])
+        )
 
         review = result.clause_reviews[0]
         self.assertEqual(review.status, ClauseReviewStatus.REVIEW_FAILED)
         self.assertEqual(review.error_code, "unknown_citation")
-        self.assertEqual(review.findings, [])
+        self.assertEqual(review.assessments, [])
         self.assertEqual(result.status, ReviewRunStatus.FAILED)
-
-    async def test_non_verbatim_excerpt_rejects_complete_response(self) -> None:
-        gateway = FakeGateway(
-            [potential_violation_json(excerpt="ข้อความที่ไม่มีในสัญญา")]
-        )
-        service = ClauseReviewService(gateway)
-
-        result = await service.review(make_preparation([make_clause_result()]))
-
-        review = result.clause_reviews[0]
-        self.assertEqual(review.status, ClauseReviewStatus.REVIEW_FAILED)
-        self.assertEqual(review.error_code, "contract_excerpt_mismatch")
-        self.assertEqual(review.findings, [])
 
     async def test_no_retrieved_source_skips_language_model(self) -> None:
         gateway = FakeGateway([])
@@ -210,26 +351,31 @@ class ClauseReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         review = result.clause_reviews[0]
-        self.assertEqual(review.status, ClauseReviewStatus.NEEDS_MORE_EVIDENCE)
+        self.assertEqual(
+            review.status,
+            ClauseReviewStatus.NEEDS_MORE_EVIDENCE,
+        )
         self.assertIsNotNone(review.evidence_gap)
+        self.assertEqual(review.assessments, [])
         self.assertEqual(gateway.requests, [])
         self.assertEqual(result.status, ReviewRunStatus.READY)
 
     async def test_invalid_json_is_isolated_from_other_clause(self) -> None:
         second_clause = make_clause_result(
             "clause-0002",
-            text="ข้อสัญญาที่สอง",
+            text="Second contract clause.",
         )
         gateway = FakeGateway(
             [
                 "not-json",
-                json.dumps(
-                    {
-                        "clause_id": "clause-0002",
-                        "status": "no_issue_found",
-                        "findings": [],
-                        "evidence_gap": None,
-                    }
+                review_json(
+                    [
+                        assessment(
+                            "assessment-01",
+                            "compliant",
+                        )
+                    ],
+                    clause_id="clause-0002",
                 ),
             ]
         )
@@ -259,34 +405,57 @@ class ClauseReviewServiceTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
         )
-        service = ClauseReviewService(gateway)
 
-        result = await service.review(make_preparation([make_clause_result()]))
+        result = await ClauseReviewService(gateway).review(
+            make_preparation([make_clause_result()])
+        )
 
         review = result.clause_reviews[0]
         self.assertEqual(review.status, ClauseReviewStatus.REVIEW_FAILED)
         self.assertEqual(review.error_code, "llm_timeout")
 
-    async def test_invalid_status_payload_is_rejected(self) -> None:
-        gateway = FakeGateway(
-            [
-                json.dumps(
-                    {
-                        "clause_id": "clause-0001",
-                        "status": "potential_violation",
-                        "findings": [],
-                        "evidence_gap": None,
-                    }
-                )
-            ]
+    async def test_invalid_assessment_payload_is_rejected(self) -> None:
+        diagnostics = []
+        invalid = assessment("assessment-01", "potential_violation")
+        invalid["suggested_revision"] = None
+        gateway = FakeGateway([review_json([invalid])])
+        service = ClauseReviewService(
+            gateway,
+            diagnostic_callback=diagnostics.append,
         )
-        service = ClauseReviewService(gateway)
 
         result = await service.review(make_preparation([make_clause_result()]))
 
         review = result.clause_reviews[0]
         self.assertEqual(review.status, ClauseReviewStatus.REVIEW_FAILED)
         self.assertEqual(review.error_code, "invalid_model_output")
+        self.assertEqual(len(diagnostics), 1)
+        self.assertFalse(diagnostics[0].accepted)
+        self.assertEqual(
+            diagnostics[0].validation_errors[0].error_type,
+            "value_error",
+        )
+
+    async def test_invalid_json_diagnostic_keeps_exact_raw_response(self) -> None:
+        diagnostics = []
+        raw_response = '{"clause_id": "clause-0001"'
+        gateway = FakeGateway([raw_response])
+        service = ClauseReviewService(
+            gateway,
+            diagnostic_callback=diagnostics.append,
+        )
+
+        result = await service.review(make_preparation([make_clause_result()]))
+
+        self.assertEqual(
+            result.clause_reviews[0].status,
+            ClauseReviewStatus.REVIEW_FAILED,
+        )
+        self.assertEqual(diagnostics[0].raw_model_output, raw_response)
+        self.assertEqual(
+            diagnostics[0].validation_errors[0].error_type,
+            "json_invalid",
+        )
 
 
 if __name__ == "__main__":

@@ -1,122 +1,128 @@
 # Evidence-grounded clause reviewer
 
-This phase adds legal review after the deterministic clause retrieval baseline:
+The pipeline is:
 
 ```text
-DOCX -> blocks -> clauses -> hybrid retrieval -> LLM review -> validated findings
+DOCX -> blocks -> clauses -> hybrid retrieval -> LLM assessments -> validated review
 ```
 
-It reviews clauses that exist in the contract. It does not yet detect a clause
-that is entirely missing or certify that the whole contract complies with every
-applicable law.
+It reviews clauses present in the contract. Missing-clause detection and
+whole-contract certification remain outside this phase.
 
-## Trust boundary
+## Review model
 
-The model receives one clause and the legal sources retrieved for that clause.
-It may return `no_issue_found`, `potential_violation`,
-`needs_more_evidence`, or `not_applicable`.
+The model receives one clause and every unique source retrieved for it. It
+returns `applicable`, a Thai `applicability_reason`, and only material
+`assessments`. It does not create one assessment per retrieved source.
 
-The application creates `review_failed`; the model cannot select it. Before a
-finding is exposed, the application requires:
+| Assessment outcome | Meaning |
+| --- | --- |
+| `compliant` | The excerpt satisfies the cited requirement. |
+| `potential_violation` | It may conflict with or provide less than the cited requirement. |
+| `needs_more_evidence` | Available law or facts cannot resolve the issue. |
 
-- the returned `clause_id` to match the requested clause;
-- every `contract_excerpt` to occur verbatim in the clause;
-- every citation to reference a retrieved `source_id`;
-- unique finding IDs; and
-- a payload that satisfies the status-specific schema rules.
+Compliant and unresolved assessments remain visible for lawyer review. The
+backend derives the clause status in this order:
 
-If any check fails, the complete clause response becomes `review_failed`. No
-untrusted partial finding is exposed. The application hydrates accepted source
-IDs with `law_name`, `section`, legal text, and source-file provenance.
+1. `not_applicable` when `applicable=false`;
+2. `potential_violation` when any assessment has that outcome;
+3. `needs_more_evidence` when no violation exists but an assessment needs
+   more evidence;
+4. `no_issue_found` when all assessments are compliant.
 
-When retrieval returns no sources, the application skips the model and returns
+`review_failed` is application-owned.
+
+## Model-output example
+
+```json
+{
+  "clause_id": "clause-0005",
+  "applicable": true,
+  "applicability_reason": "ข้อสัญญากำหนดเวลาทำงานและเวลาพัก",
+  "assessments": [
+    {
+      "assessment_id": "assessment-01",
+      "outcome": "compliant",
+      "issue": "เวลาทำงานปกติ",
+      "reasoning": "ข้อสัญญากำหนดเวลาไม่เกินหลักฐานกฎหมายที่อ้าง",
+      "citations": [{"source_id": "law:1f16784831daf20f"}],
+      "evidence_gap": null,
+      "suggested_revision": null,
+      "confidence": "high"
+    }
+  ]
+}
+```
+
+## Validation boundary
+
+Before exposing an assessment, the backend requires a matching `clause_id`,
+retrieved citation IDs, unique assessment IDs, valid outcome-specific fields,
+and consistent applicability. Any failure makes
+the complete clause response `review_failed`. Accepted source IDs are hydrated
+with law name, section, text, and source-file provenance.
+
+When retrieval has no source, the backend skips the model and returns
 `needs_more_evidence`.
 
-## Status meaning
+## Retrieval and review artifacts
 
-| Status | Meaning |
-| --- | --- |
-| `potential_violation` | At least one evidence-supported issue was found. |
-| `no_issue_found` | No issue was found from the supplied evidence; this is not a whole-contract compliance claim. |
-| `needs_more_evidence` | Retrieval evidence is missing, irrelevant, or insufficient. |
-| `not_applicable` | The unit contains no reviewable contract substance. |
-| `review_failed` | The provider call or application validation failed. |
+`--top-k 5` applies per query. Long clauses can produce multiple queries, so
+a clause may have more than five unique sources. The model sees the entire
+deduplicated list and selects citations material to each assessment.
+
+- `retrieval.json`: every retrieved source, including unused candidates.
+- `review.json`: validated assessments and their cited sources.
+- `llm-debug.json`: exact raw model output and validation diagnostics.
+- `run.json`: retrieval and review summaries.
 
 ## Run with a real DOCX
 
-Configure an ignored `.env` with at least:
+Activation is supported:
 
-```env
-OPENROUTER_API_KEY=your-key
-OPENROUTER_MODEL=openai/gpt-5-mini
+```powershell
+.\.venv\Scripts\Activate.ps1
+python scripts\try_clause_review.py docs\mock.docx
 ```
 
-The vector database and hybrid retrieval configuration must also be available.
-From the backend directory, run:
+The equivalent command without activation is:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\try_clause_review.py docs\mock.docx
 ```
 
-For a specific output directory and conservative sequential execution:
+For a fixed output directory:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\try_clause_review.py docs\mock.docx `
+python scripts\try_clause_review.py docs\mock.docx `
   --top-k 5 `
   --retrieval-concurrency 1 `
   --review-concurrency 1 `
-  --max-output-tokens 2000 `
-  --output-dir tmp\my-clause-review
+  --max-output-tokens 4096 `
+  --output-dir tmp\my-assessment-review
 ```
 
-The script uses a unique directory under `tmp/clause-review/` by default and
-writes:
+The directory must not already exist. This real run calls embedding, Qdrant,
+and LLM services and can consume provider credits.
 
-- `document.json`: parser blocks;
-- `retrieval.json`: clauses, queries, and retrieved sources;
-- `review.json`: validated clause reviews and hydrated citations; and
-- `run.json`: input path and retrieval/review summaries.
-
-Exit codes are `0` for ready, `2` for partial, and `1` for failed or invalid
-input. A ready run can still contain `needs_more_evidence`; ready means the
-workflow completed without a technical or validation failure.
-
-The command calls the configured embedding service, Qdrant, and LLM provider.
-It can consume provider credits. Unit tests do not make network calls.
-
-## Run the automated checks
-
-Focused reviewer tests:
+## Automated checks
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest tests.unit.test_clause_reviewer -v
-```
-
-Full suite:
-
-```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-```
-
-Syntax compilation:
-
-```powershell
 .\.venv\Scripts\python.exe -m compileall -q app scripts tests
+git diff --check
 ```
 
 ## Debugging order
 
-1. Read `run.json` to determine whether the run was ready, partial, or failed.
-2. Inspect the affected clause in `retrieval.json` and verify that its sources
-   are relevant and sufficient.
-3. Inspect `error_code` in `review.json`.
-4. For `unknown_citation`, compare the model citation with retrieved source IDs.
-5. For `contract_excerpt_mismatch`, compare the returned excerpt byte-for-byte
-   with `clause.text`.
-6. For `invalid_model_output`, reproduce with the recorded clause and sources;
-   the application intentionally does not expose malformed output as a finding.
+1. Read `run.json` for the run status and counts.
+2. Inspect all candidate sources for the clause in `retrieval.json`.
+3. Inspect derived status and accepted assessments in `review.json`.
+4. Find the same `clause_id` in `llm-debug.json`.
+5. Compare `raw_model_output`, `validation_errors`, `finish_reason`, and
+   `accepted`.
+6. For `unknown_citation`, compare the citation with retrieved source IDs.
 
-The current result records model identity, provider, and token/cost usage that
-the provider reports. It does not persist the raw malformed LLM response because
-contract text can be sensitive; add an explicitly protected diagnostic sink if
-raw-response retention becomes necessary.
+`llm-debug.json` can contain contract text and legal analysis. Keep it under
+the ignored `tmp/` tree and do not expose it through a public API.

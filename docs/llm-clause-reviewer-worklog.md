@@ -35,9 +35,9 @@ continue. A clause with no retrieved source skips the LLM and becomes
 
 ### Frontend traceability
 
-The application retains the complete `ContractClause`, including
-`block_indices`. Each finding also contains an exact `contract_excerpt`. The
-backend verifies that the excerpt exists verbatim before exposing the finding.
+The application retains the complete `ContractClause`, including `clause_id`,
+clause number, title, text, and `block_indices`. Assessments refer to that parent
+clause instead of duplicating an exact contract excerpt.
 
 ## Chronological project command log
 
@@ -166,7 +166,7 @@ To preserve a predictable artifact path while debugging, use:
   --top-k 5 `
   --retrieval-concurrency 1 `
   --review-concurrency 1 `
-  --max-output-tokens 2000 `
+  --max-output-tokens 4096 `
   --output-dir tmp\my-clause-review
 ```
 
@@ -194,3 +194,179 @@ rg -n '[ \t]+$' $targets
 Result: no trailing whitespace was found. Ripgrep exits with code 1 when it
 finds no match; the validation wrapper treated that expected no-match result as
 success.
+## Raw LLM diagnostic implementation
+
+The developer requested exact model output and validation detail for failed clause
+reviews. The implementation keeps trusted results in `review.json` and writes
+developer-only traces to `llm-debug.json` under the ignored `tmp/` tree.
+
+Each diagnostic record contains:
+
+- `clause_id` and whether backend validation accepted the response;
+- exact `raw_model_output` from `message.content`;
+- sanitized Pydantic or provenance validation errors;
+- `finish_reason`, request ID, model, provider, and usage; and
+- a stable error code or gateway exception type when no model content exists.
+
+The first patch mechanism failed because the Windows workspace helper could not
+refresh. The executable fallback was also denied by WindowsApps. A Git patch
+fallback then placed several zero-context insertions at shifted line numbers,
+temporarily making the reviewer, script, and test files syntactically invalid.
+This was detected during source inspection before tests. A bulk reverse was not
+performed because automatic approval review rejected it as potentially
+discarding user work. The affected blocks were repaired individually with
+narrow patches, preserving the developer's 4,096-token script default.
+
+### Compilation after repair
+
+Command:
+
+```powershell
+.\.venv\Scripts\python.exe -m compileall -q app scripts tests
+```
+
+Result: exit code 0 with no output.
+
+### Focused diagnostic tests
+
+Command:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.unit.test_clause_reviewer -v
+```
+
+Result: all 8 tests passed in 0.100 seconds. The new tests prove that accepted
+responses retain their exact content and metadata, malformed JSON retains its
+exact raw string with a `json_invalid` error, and status/schema failures expose
+their validation error without entering trusted findings.
+
+### Full project suite
+
+Command:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+Result: all 45 tests passed in 0.485 seconds. The existing local-Qdrant payload
+index warning appeared and its test passed.
+
+### Real-provider rerun
+
+This command was intentionally left for the developer because it calls Qdrant,
+loads the embedding model, calls OpenRouter, and may consume credits:
+
+```powershell
+python scripts\try_clause_review.py docs\mock.docx `
+  --output-dir tmp\my-clause-review-debug
+```
+
+The output directory must not already exist. Inspect `llm-debug.json` for the
+
+
+## Legal-assessment schema migration
+
+The lawyer-facing result now retains material compliant and unresolved analysis,
+in addition to potential violations. The model returns `applicable`,
+`applicability_reason`, and per-issue `assessments`. Each assessment owns an
+`outcome`, citations, an optional evidence gap, and an optional suggested
+revision. The backend derives clause status with violation taking priority over
+an evidence gap, and an evidence gap taking priority over an all-compliant
+result.
+
+Retrieval behavior did not change. `top_k` remains per query,
+`retrieval.json` preserves every candidate source, and the reviewed result
+hydrates only citation IDs selected by the model.
+
+### Implementation-tool failures observed
+
+The first `apply_patch` attempt did not modify a file. The Windows sandbox
+helper failed during setup refresh with `helper_unknown_error`. The fallback
+writer's first two in-process encoding attempts also stopped before mutation
+because that JavaScript runtime did not expose `TextEncoder` or `btoa`.
+A small explicit base64 encoder was then used with PowerShell's
+`WriteAllBytes`.
+
+The first documentation fallback encoded a Thai JSON example with an
+ASCII-only helper. This was recognized immediately and the complete file was
+rewritten with an explicit UTF-8 encoder before validation.
+
+The first JSON-schema inspection printed the top-level fields and then failed
+with `KeyError: ''` because PowerShell expanded `$defs` inside the Python
+command. Escaping the dollar sign fixed the inspection; no application code
+changed for this command issue.
+
+### Focused reviewer tests after migration
+
+Command:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.unit.test_clause_reviewer -v
+```
+
+Result: all 12 tests passed in 0.147 seconds. Coverage includes retained
+compliant assessments, mixed compliant/evidence-gap results, violation
+priority, not-applicable output, citation hydration, provenance rejection,
+no-source behavior, diagnostics, and provider-failure isolation.
+
+### Full project suite after migration
+
+Command:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+Result: all 49 tests passed in 0.557 seconds. The existing local-Qdrant payload
+index warning appeared and its test passed.
+
+### Compilation after migration
+
+Command:
+
+```powershell
+.\.venv\Scripts\python.exe -m compileall -q app scripts tests
+```
+
+Result: exit code 0 with no output.
+
+### Generated-schema inspection
+
+Command:
+
+```powershell
+.\.venv\Scripts\python.exe -c "from app.reviews.review_models import GeneratedClauseReview; s=GeneratedClauseReview.model_json_schema(); a=s['`$defs']['GeneratedLegalAssessment']; print(sorted(s['properties'])); print(s['required']); print(sorted(a['properties'])); print(a['required'])"
+```
+
+Result: the generated model schema requires `clause_id`, `applicable`,
+`applicability_reason`, and `assessments`. Every assessment requires
+`assessment_id`, `outcome`, `issue`, `reasoning`,
+`citations`, `evidence_gap`, `suggested_revision`, and `confidence`.
+Nullable fields remain required so strict structured output must state
+`null` explicitly.
+
+### Git whitespace check
+
+Command:
+
+```powershell
+git diff --check
+```
+
+Result: exit code 0. Git printed line-ending notices that LF will become CRLF
+when it next writes the changed files; it found no whitespace error.
+
+### Real-provider migration check left for the developer
+
+This command was not run because it calls embedding, Qdrant, and LLM services
+and can consume credits:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python scripts\try_clause_review.py docs\mock.docx `
+  --top-k 5 `
+  --retrieval-concurrency 1 `
+  --review-concurrency 1 `
+  --max-output-tokens 4096 `
+  --output-dir tmp\assessment-review
+```
