@@ -1,0 +1,207 @@
+import json
+import unittest
+
+from app.reviews.review_models import ClauseReviewStatus, ReviewRunStatus
+from app.reviews.whole_contract_reviewer import WholeContractReviewService
+from tests.unit.test_clause_reviewer import (
+    FakeGateway,
+    assessment,
+    make_clause_result,
+    make_preparation,
+)
+
+
+def whole_review_json(
+    clause_ids: list[str],
+    *,
+    source_id: str = "law:overtime",
+) -> str:
+    return json.dumps(
+        {
+            "clause_reviews": [
+                {
+                    "clause_id": clause_id,
+                    "applicable": True,
+                    "applicability_reason": "มีข้อกำหนดการจ้างงาน",
+                    "assessments": [
+                        {
+                            **assessment(
+                                f"assessment-{index:02d}",
+                                "compliant",
+                                source_id=source_id,
+                            ),
+                            "supporting_contract_clause_ids": [clause_id],
+                        }
+                    ],
+                }
+                for index, clause_id in enumerate(clause_ids, start=1)
+            ]
+        }
+    )
+
+
+class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_single_request_contains_all_clauses_and_unique_sources(self) -> None:
+        first = make_clause_result("clause-0001")
+        second = make_clause_result(
+            "clause-0002",
+            text="Employee receives one rest day per week.",
+        )
+        raw = whole_review_json(["clause-0001", "clause-0002"])
+        gateway = FakeGateway([raw])
+
+        result = await WholeContractReviewService(gateway).review(
+            make_preparation([first, second])
+        )
+
+        self.assertEqual(len(gateway.requests), 1)
+        self.assertEqual(result.status, ReviewRunStatus.READY)
+        self.assertEqual(len(result.clause_reviews), 2)
+        self.assertEqual(len(result.unique_legal_sources), 1)
+        self.assertEqual(len(result.evidence_mappings), 2)
+        self.assertEqual(
+            {mapping.clause_id for mapping in result.evidence_mappings},
+            {"clause-0001", "clause-0002"},
+        )
+        prompt = gateway.requests[0].messages[1].content
+        self.assertIn("clause-0001", prompt)
+        self.assertIn("clause-0002", prompt)
+        unique_source_section = prompt.split("UNIQUE_LEGAL_SOURCES", 1)[1].split(
+            "EVIDENCE_MAPPINGS", 1
+        )[0]
+        self.assertEqual(unique_source_section.count("law:overtime"), 1)
+        self.assertTrue(result.llm_debug.accepted)
+        self.assertEqual(result.llm_debug.response.content, raw)
+        self.assertEqual(result.llm_debug.response.request_id, "test-request-1")
+
+    async def test_missing_clause_rejects_entire_response(self) -> None:
+        gateway = FakeGateway([whole_review_json(["clause-0001"])])
+
+        result = await WholeContractReviewService(gateway).review(
+            make_preparation(
+                [
+                    make_clause_result("clause-0001"),
+                    make_clause_result("clause-0002"),
+                ]
+            )
+        )
+
+        self.assertEqual(result.status, ReviewRunStatus.FAILED)
+        self.assertEqual(
+            result.llm_debug.error_code,
+            "clause_coverage_mismatch",
+        )
+        self.assertEqual(
+            {review.status for review in result.clause_reviews},
+            {ClauseReviewStatus.REVIEW_FAILED},
+        )
+
+    async def test_unknown_citation_is_rejected_and_raw_response_is_kept(self) -> None:
+        raw = whole_review_json(["clause-0001"], source_id="law:invented")
+        gateway = FakeGateway([raw])
+
+        result = await WholeContractReviewService(gateway).review(
+            make_preparation([make_clause_result("clause-0001")])
+        )
+
+        self.assertEqual(result.llm_debug.error_code, "unknown_citation")
+        self.assertEqual(result.llm_debug.response.content, raw)
+
+    async def test_unknown_supporting_clause_is_rejected(self) -> None:
+        payload = json.loads(whole_review_json(["clause-0001"]))
+        payload["clause_reviews"][0]["assessments"][0][
+            "supporting_contract_clause_ids"
+        ] = ["clause-0001", "clause-invented"]
+        gateway = FakeGateway([json.dumps(payload)])
+
+        result = await WholeContractReviewService(gateway).review(
+            make_preparation([make_clause_result("clause-0001")])
+        )
+
+        self.assertEqual(
+            result.llm_debug.error_code,
+            "unknown_supporting_contract_clause",
+        )
+
+    async def test_clause_without_sources_is_still_sent_to_llm(self) -> None:
+        no_source = make_clause_result("clause-0001", with_source=False)
+        raw = json.dumps(
+            {
+                "clause_reviews": [
+                    {
+                        "clause_id": "clause-0001",
+                        "applicable": True,
+                        "applicability_reason": "มีข้อกำหนดการจ้างงาน",
+                        "assessments": [
+                            {
+                                "assessment_id": "assessment-01",
+                                "outcome": "needs_more_evidence",
+                                "issue": "หลักฐานกฎหมายไม่เพียงพอ",
+                                "reasoning": "ไม่มีแหล่งกฎหมายที่ค้นคืนได้",
+                                "citations": [],
+                                "evidence_gap": "ต้องค้นหาบทกฎหมายที่เกี่ยวข้อง",
+                                "suggested_revision": None,
+                                "confidence": "low",
+                                "supporting_contract_clause_ids": [
+                                    "clause-0001"
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        gateway = FakeGateway([raw])
+
+        result = await WholeContractReviewService(gateway).review(
+            make_preparation([no_source])
+        )
+
+        self.assertEqual(len(gateway.requests), 1)
+        self.assertEqual(
+            result.clause_reviews[0].status,
+            ClauseReviewStatus.NEEDS_MORE_EVIDENCE,
+        )
+
+
+    async def test_invalid_clause_does_not_discard_valid_clause_reviews(self) -> None:
+        payload = json.loads(
+            whole_review_json(["clause-0001", "clause-0002"])
+        )
+        payload["clause_reviews"][1]["assessments"][0][
+            "evidence_gap"
+        ] = "This is invalid for a compliant assessment."
+        gateway = FakeGateway([json.dumps(payload)])
+
+        result = await WholeContractReviewService(gateway).review(
+            make_preparation(
+                [
+                    make_clause_result("clause-0001"),
+                    make_clause_result("clause-0002"),
+                ]
+            )
+        )
+
+        self.assertEqual(result.status, ReviewRunStatus.PARTIAL)
+        self.assertEqual(
+            result.clause_reviews[0].status,
+            ClauseReviewStatus.NO_ISSUE_FOUND,
+        )
+        self.assertEqual(
+            result.clause_reviews[1].status,
+            ClauseReviewStatus.REVIEW_FAILED,
+        )
+        self.assertEqual(result.summary.assessment_count, 1)
+        self.assertEqual(
+            result.llm_debug.error_code,
+            "partial_invalid_model_output",
+        )
+        self.assertEqual(
+            result.llm_debug.validation_errors[0].location[:2],
+            ["clause_reviews", 1],
+        )
+
+
+
+if __name__ == "__main__":
+    unittest.main()

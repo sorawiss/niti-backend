@@ -12,6 +12,7 @@ from app.chat.service import ChatService
 from app.llm.factory import create_llm_gateway
 from app.reviews.reviewer import ClauseReviewService
 from app.reviews.service import ClauseRetrievalService
+from app.reviews.whole_contract_reviewer import WholeContractReviewService
 
 
 @asynccontextmanager
@@ -22,6 +23,10 @@ async def lifespan(app: FastAPI):
     app.state.clause_review_service = ClauseReviewService(
         llm_gateway,
         max_output_tokens=4096,
+    )
+    app.state.whole_contract_review_service = WholeContractReviewService(
+        llm_gateway,
+        max_output_tokens=16384,
     )
     try:
         yield

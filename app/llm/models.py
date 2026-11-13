@@ -42,3 +42,4 @@ class LLMResponse(BaseModel):
     finish_reason: str | None = None
     request_id: str | None = None
     usage: LLMUsage = Field(default_factory=LLMUsage)
+    raw_response: dict[str, Any] | None = None

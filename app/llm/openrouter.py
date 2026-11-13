@@ -127,6 +127,7 @@ class OpenRouterGateway(LLMGateway):
                     total_tokens=usage_data.get("total_tokens"),
                     cost=usage_data.get("cost"),
                 ),
+                raw_response=data,
             )
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise LLMInvalidResponseError(
