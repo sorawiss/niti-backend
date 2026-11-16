@@ -1,6 +1,7 @@
 import json
 import unittest
 
+from app.llm.models import LLMResponse, LLMUsage
 from app.reviews.review_models import ClauseReviewStatus, ReviewRunStatus
 from app.reviews.whole_contract_reviewer import WholeContractReviewService
 from tests.unit.test_clause_reviewer import (
@@ -9,6 +10,20 @@ from tests.unit.test_clause_reviewer import (
     make_clause_result,
     make_preparation,
 )
+
+def whole_assessment(
+    assessment_id: str,
+    outcome: str,
+    *,
+    clause_id: str,
+    source_id: str = "law:overtime",
+) -> dict[str, object]:
+    value = assessment(assessment_id, outcome, source_id=source_id)
+    value.pop("evidence_gap")
+    value.pop("suggested_revision")
+    value["supporting_contract_clause_ids"] = [clause_id]
+    return value
+
 
 
 def whole_review_json(
@@ -24,14 +39,10 @@ def whole_review_json(
                     "applicable": True,
                     "applicability_reason": "มีข้อกำหนดการจ้างงาน",
                     "assessments": [
-                        {
-                            **assessment(
-                                f"assessment-{index:02d}",
-                                "compliant",
-                                source_id=source_id,
-                            ),
-                            "supporting_contract_clause_ids": [clause_id],
-                        }
+                        whole_assessment(
+                            f"assessment-{index:02d}", "compliant",
+                            clause_id=clause_id, source_id=source_id,
+                        )
                     ],
                 }
                 for index, clause_id in enumerate(clause_ids, start=1)
@@ -70,6 +81,12 @@ class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
             "EVIDENCE_MAPPINGS", 1
         )[0]
         self.assertEqual(unique_source_section.count("law:overtime"), 1)
+        schema = gateway.requests[0].response_format["json_schema"]["schema"]
+        assessment_properties = schema["$defs"][
+            "GeneratedWholeContractAssessment"
+        ]["properties"]
+        self.assertNotIn("evidence_gap", assessment_properties)
+        self.assertNotIn("suggested_revision", assessment_properties)
         self.assertTrue(result.llm_debug.accepted)
         self.assertEqual(result.llm_debug.response.content, raw)
         self.assertEqual(result.llm_debug.response.request_id, "test-request-1")
@@ -139,8 +156,6 @@ class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
                                 "issue": "หลักฐานกฎหมายไม่เพียงพอ",
                                 "reasoning": "ไม่มีแหล่งกฎหมายที่ค้นคืนได้",
                                 "citations": [],
-                                "evidence_gap": "ต้องค้นหาบทกฎหมายที่เกี่ยวข้อง",
-                                "suggested_revision": None,
                                 "confidence": "low",
                                 "supporting_contract_clause_ids": [
                                     "clause-0001"
@@ -168,9 +183,7 @@ class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(
             whole_review_json(["clause-0001", "clause-0002"])
         )
-        payload["clause_reviews"][1]["assessments"][0][
-            "evidence_gap"
-        ] = "This is invalid for a compliant assessment."
+        payload["clause_reviews"][1]["assessments"][0]["citations"] = []
         gateway = FakeGateway([json.dumps(payload)])
 
         result = await WholeContractReviewService(gateway).review(
@@ -201,6 +214,54 @@ class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
             ["clause_reviews", 1],
         )
 
+
+
+    def test_logs_model_provider_and_detailed_usage_without_content(self) -> None:
+        response = LLMResponse(
+            content="sensitive contract analysis",
+            model="openai/gpt-5-mini-2025-08-07",
+            provider="Azure",
+            finish_reason="stop",
+            request_id="generation-123",
+            usage=LLMUsage(total_tokens=130),
+            raw_response={
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 30,
+                    "total_tokens": 130,
+                    "cost": 0.001,
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 12
+                    },
+                },
+                "openrouter_metadata": {
+                    "requested": "openai/gpt-5-mini",
+                    "region": "BKK",
+                },
+            },
+        )
+
+        with self.assertLogs(
+            "uvicorn.error",
+            level="INFO",
+        ) as captured:
+            WholeContractReviewService._log_model_usage(response)
+
+        logged = json.loads(
+            captured.output[0].split("whole_contract_llm=", 1)[1]
+        )
+        self.assertEqual(logged["model"], response.model)
+        self.assertEqual(logged["provider"], "Azure")
+        self.assertEqual(logged["usage"]["total_tokens"], 130)
+        self.assertEqual(
+            logged["usage"]["completion_tokens_details"]["reasoning_tokens"],
+            12,
+        )
+        self.assertEqual(
+            logged["provider_metadata"]["requested"],
+            "openai/gpt-5-mini",
+        )
+        self.assertNotIn(response.content, captured.output[0])
 
 
 if __name__ == "__main__":

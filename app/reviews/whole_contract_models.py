@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.llm.models import LLMResponse
 from app.reviews.models import (
@@ -7,20 +7,37 @@ from app.reviews.models import (
     RetrievalStatus,
 )
 from app.reviews.review_models import (
+    AssessmentConfidence,
     ClauseReviewStatus,
     GeneratedClauseReview,
-    GeneratedLegalAssessment,
-    LegalAssessment,
+    GeneratedLegalCitation,
+    LegalAssessmentOutcome,
+    LegalCitation,
     ReviewRunStatus,
     ReviewSummary,
     ReviewValidationIssue,
 )
 
 
-class GeneratedWholeContractAssessment(GeneratedLegalAssessment):
+class GeneratedWholeContractAssessment(BaseModel):
     """Generated assessment with explicit contract-clause provenance."""
 
+    model_config = ConfigDict(extra="forbid")
+
+    assessment_id: str = Field(min_length=1)
+    outcome: LegalAssessmentOutcome
+    issue: str = Field(min_length=1)
+    reasoning: str = Field(min_length=1)
+    citations: list[GeneratedLegalCitation]
+    confidence: AssessmentConfidence
     supporting_contract_clause_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_required_citations(self) -> "GeneratedWholeContractAssessment":
+        if self.outcome != LegalAssessmentOutcome.NEEDS_MORE_EVIDENCE:
+            if not self.citations:
+                raise ValueError(f"{self.outcome.value} requires a citation")
+        return self
 
 
 class GeneratedWholeContractClauseReview(GeneratedClauseReview):
@@ -35,7 +52,15 @@ class GeneratedWholeContractReview(BaseModel):
     clause_reviews: list[GeneratedWholeContractClauseReview]
 
 
-class WholeContractLegalAssessment(LegalAssessment):
+class WholeContractLegalAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    assessment_id: str
+    outcome: LegalAssessmentOutcome
+    issue: str
+    reasoning: str
+    citations: list[LegalCitation] = Field(default_factory=list)
+    confidence: AssessmentConfidence
     supporting_contract_clause_ids: list[str] = Field(min_length=1)
 
 
@@ -47,7 +72,6 @@ class WholeContractClauseReviewResult(BaseModel):
     status: ClauseReviewStatus
     applicability_reason: str | None = None
     assessments: list[WholeContractLegalAssessment] = Field(default_factory=list)
-    evidence_gap: str | None = None
     error_code: str | None = None
 
 

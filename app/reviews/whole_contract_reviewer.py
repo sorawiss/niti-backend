@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any
 
 from pydantic import ValidationError
@@ -32,6 +33,9 @@ from app.reviews.whole_contract_models import (
 from app.reviews.whole_contract_prompts import (
     build_whole_contract_review_messages,
 )
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class WholeContractReviewService:
@@ -82,6 +86,8 @@ class WholeContractReviewService:
                 error_code="llm_unexpected_error",
                 exception_type=type(error).__name__,
             )
+
+        self._log_model_usage(response)
 
         try:
             generated = GeneratedWholeContractReview.model_validate_json(
@@ -267,8 +273,6 @@ class WholeContractReviewService:
                     )
                     for source in [sources_by_id[source_id]]
                 ],
-                evidence_gap=assessment.evidence_gap,
-                suggested_revision=assessment.suggested_revision,
                 confidence=assessment.confidence,
                 supporting_contract_clause_ids=list(
                     dict.fromkeys(assessment.supporting_contract_clause_ids)
@@ -276,20 +280,12 @@ class WholeContractReviewService:
             )
             for assessment in generated.assessments
         ]
-        gaps = list(
-            dict.fromkeys(
-                assessment.evidence_gap
-                for assessment in assessments
-                if assessment.evidence_gap is not None
-            )
-        )
         return WholeContractClauseReviewResult(
             clause=clause_result.clause,
             retrieval_status=clause_result.status,
             status=WholeContractReviewService._derive_status(generated),
             applicability_reason=generated.applicability_reason,
             assessments=assessments,
-            evidence_gap="\n".join(gaps) or None,
         )
 
     @staticmethod
@@ -609,4 +605,31 @@ class WholeContractReviewService:
             ):
                 return "missing_reviewed_clause_support"
         return None
+
+    @staticmethod
+    def _log_model_usage(response: LLMResponse) -> None:
+        raw_response = response.raw_response or {}
+        raw_usage = raw_response.get("usage")
+        metadata = raw_response.get("openrouter_metadata")
+        logger.info(
+            "whole_contract_llm=%s",
+            json.dumps(
+                {
+                    "request_id": response.request_id,
+                    "model": response.model,
+                    "provider": response.provider,
+                    "finish_reason": response.finish_reason,
+                    "usage": (
+                        raw_usage
+                        if isinstance(raw_usage, dict)
+                        else response.usage.model_dump(mode="json")
+                    ),
+                    "provider_metadata": (
+                        metadata if isinstance(metadata, dict) else None
+                    ),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
 
