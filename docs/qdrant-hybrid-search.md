@@ -32,6 +32,10 @@ The command refuses to target the legacy collection.
 | `HYBRID_PREFETCH_LIMIT` | `50` | Dense and sparse candidates sent to RRF |
 | `HYBRID_RRF_K` | `60` | Reciprocal Rank Fusion constant |
 
+Optional second-stage reranking is documented in [reranker.md](reranker.md).
+
 At query time, Qdrant retrieves candidates from the named `dense` and `sparse`
-vectors, applies native RRF, and returns the existing `score`, `text`, and
-`metadata` result contract used by chat and clause review.
+vectors and applies native RRF. The retriever returns the existing `score`,
+`text`, and `metadata` contract used by chat and clause review, plus explicit
+retrieval and reranker score/rank fields. With reranking disabled, `score`
+remains the RRF score.

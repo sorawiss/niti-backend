@@ -14,6 +14,10 @@ class LegalAnswerStatus(StrEnum):
 class LegalSource(BaseModel):
     source_id: str
     score: float | None = None
+    retrieval_score: float | None = None
+    rerank_score: float | None = None
+    retrieval_rank: int | None = None
+    rerank_rank: int | None = None
     law_name: str
     section: str
     text: str

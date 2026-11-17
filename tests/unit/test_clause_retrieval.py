@@ -31,6 +31,10 @@ class ClauseRetrieverTests(unittest.IsolatedAsyncioTestCase):
             return [
                 {
                     "score": score,
+                    "retrieval_score": 0.03,
+                    "rerank_score": score,
+                    "retrieval_rank": 3,
+                    "rerank_rank": 1,
                     "text": "กฎหมายเรื่องการทำงานล่วงเวลา",
                     "metadata": {
                         "law_name": "พระราชบัญญัติคุ้มครองแรงงาน พ.ศ. 2541",
@@ -68,6 +72,10 @@ class ClauseRetrieverTests(unittest.IsolatedAsyncioTestCase):
             ["clause-0001-q01", "clause-0001-q02"],
         )
         self.assertEqual(len(source.matches), 2)
+        self.assertEqual(source.matches[0].retrieval_score, 0.03)
+        self.assertEqual(source.matches[0].rerank_score, 0.9)
+        self.assertEqual(source.matches[0].retrieval_rank, 3)
+        self.assertEqual(source.matches[0].rerank_rank, 1)
 
     async def test_marks_invalid_metadata_as_no_results(self) -> None:
         def retrieve(**kwargs):

@@ -36,6 +36,10 @@ class RetrieveRequest(BaseModel):
 
 class RetrieveResult(BaseModel):
     score: float | None
+    retrieval_score: float | None = None
+    rerank_score: float | None = None
+    retrieval_rank: int | None = None
+    rerank_rank: int | None = None
     text: str
     metadata: dict[str, Any]
 

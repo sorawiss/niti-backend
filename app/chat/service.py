@@ -130,6 +130,10 @@ class ChatService:
                 LegalSource(
                     source_id=f"LAW_{index}",
                     score=result.get("score"),
+                    retrieval_score=result.get("retrieval_score"),
+                    rerank_score=result.get("rerank_score"),
+                    retrieval_rank=result.get("retrieval_rank"),
+                    rerank_rank=result.get("rerank_rank"),
                     law_name=str(metadata.get("law_name") or "ไม่ระบุชื่อกฎหมาย"),
                     section=str(metadata.get("section") or "ไม่ระบุมาตรา"),
                     text=text,

@@ -56,6 +56,10 @@ class SourceMatch(BaseModel):
     query_id: str
     rank: int = Field(ge=1)
     score: float | None = None
+    retrieval_score: float | None = None
+    rerank_score: float | None = None
+    retrieval_rank: int | None = Field(default=None, ge=1)
+    rerank_rank: int | None = Field(default=None, ge=1)
 
 
 class RetrievedLegalSource(BaseModel):

@@ -215,7 +215,23 @@ class ClauseRetriever:
             separators=(",", ":"),
         ).encode("utf-8")
         source_id = f"law:{hashlib.sha256(identity).hexdigest()[:16]}"
-        match = SourceMatch(query_id=query_id, rank=rank, score=score)
+        match = SourceMatch(
+            query_id=query_id,
+            rank=rank,
+            score=score,
+            retrieval_score=ClauseRetriever._optional_float(
+                raw_result.get("retrieval_score")
+            ),
+            rerank_score=ClauseRetriever._optional_float(
+                raw_result.get("rerank_score")
+            ),
+            retrieval_rank=ClauseRetriever._optional_positive_int(
+                raw_result.get("retrieval_rank")
+            ),
+            rerank_rank=ClauseRetriever._optional_positive_int(
+                raw_result.get("rerank_rank")
+            ),
+        )
         source_file = metadata.get("source_file")
 
         return RetrievedLegalSource(
@@ -229,6 +245,14 @@ class ClauseRetriever:
             matched_query_ids=[query_id],
             matches=[match],
         )
+
+    @staticmethod
+    def _optional_float(value: Any) -> float | None:
+        return float(value) if isinstance(value, (int, float)) else None
+
+    @staticmethod
+    def _optional_positive_int(value: Any) -> int | None:
+        return value if isinstance(value, int) and value >= 1 else None
 
     @staticmethod
     def _clause_status(

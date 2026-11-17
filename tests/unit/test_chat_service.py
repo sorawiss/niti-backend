@@ -52,6 +52,10 @@ class ChatServiceTests(unittest.IsolatedAsyncioTestCase):
                 [
                     {
                         "score": 0.91,
+                        "retrieval_score": 0.032,
+                        "rerank_score": 0.91,
+                        "retrieval_rank": 4,
+                        "rerank_rank": 1,
                         "text": "นายจ้างต้องจ่ายค่าล่วงเวลา",
                         "metadata": {
                             "law_name": "กฎหมายทดสอบ",
@@ -67,6 +71,10 @@ class ChatServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.status, LegalAnswerStatus.ANSWERED)
         self.assertEqual([source.source_id for source in result.citations], ["LAW_1"])
+        self.assertEqual(result.citations[0].retrieval_score, 0.032)
+        self.assertEqual(result.citations[0].rerank_score, 0.91)
+        self.assertEqual(result.citations[0].retrieval_rank, 4)
+        self.assertEqual(result.citations[0].rerank_rank, 1)
         self.assertEqual(result.usage.total_tokens, 120)
         self.assertEqual(len(gateway.requests), 1)
         self.assertEqual(
