@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from app.api.uploads import parse_uploaded_docx
 from app.documents.models import DocumentBlock
+from app.llm.config import QueryRewriteWorkflow
 from app.reviews.review_models import ContractReviewResult
 from app.reviews.reviewer import ClauseReviewService
 from app.reviews.segmentation import ClauseSegmentationError
@@ -71,7 +72,11 @@ async def review_document(
 ) -> ContractReviewApiResponse:
     document = await parse_uploaded_docx(file)
     try:
-        preparation = await retrieval_service.prepare(document, top_k=5)
+        preparation = await retrieval_service.prepare(
+            document,
+            top_k=5,
+            workflow=QueryRewriteWorkflow.CONTRACT_REVIEW,
+        )
         review = await review_service.review(preparation)
         return ContractReviewApiResponse(
             **review.model_dump(mode="python"),
@@ -109,7 +114,11 @@ async def review_whole_contract(
 ) -> WholeContractReviewApiResponse:
     document = await parse_uploaded_docx(file)
     try:
-        preparation = await retrieval_service.prepare(document, top_k=5)
+        preparation = await retrieval_service.prepare(
+            document,
+            top_k=5,
+            workflow=QueryRewriteWorkflow.WHOLE_CONTRACT,
+        )
         review = await review_service.review(preparation)
         return WholeContractReviewApiResponse(
             **review.model_dump(mode="python", exclude={"llm_debug"}),

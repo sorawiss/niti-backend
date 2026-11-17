@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from app.chat.models import LegalAnswerStatus
 from app.chat.service import ChatGenerationError, ChatService
 from app.llm.errors import LLMGatewayError
+from app.rag.rewrite import QueryRewriteResult
 
 
 router = APIRouter(tags=["Chat"])
@@ -53,6 +54,7 @@ class ChatResponse(BaseModel):
     model: str | None
     provider: str | None
     usage: ChatUsage
+    rewrite: QueryRewriteResult
 
 
 def get_chat_service(request: Request) -> ChatService:
@@ -84,6 +86,7 @@ async def chat(request: ChatRequest, service: ChatServiceDependency) -> ChatResp
             model=result.model,
             provider=result.provider,
             usage=ChatUsage.model_validate(result.usage.model_dump()),
+            rewrite=result.rewrite,
         )
     except LLMGatewayError as error:
         raise HTTPException(

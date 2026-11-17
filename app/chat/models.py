@@ -3,6 +3,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.llm.models import LLMUsage
+from app.rag.rewrite import QueryRewriteResult
 
 
 class LegalAnswerStatus(StrEnum):
@@ -29,7 +30,6 @@ class GeneratedLegalAnswer(BaseModel):
     citation_ids: list[str]
     requires_human_review: bool
 
-
 class ChatWorkflowResult(BaseModel):
     status: LegalAnswerStatus
     answer: str
@@ -38,3 +38,4 @@ class ChatWorkflowResult(BaseModel):
     model: str | None = None
     provider: str | None = None
     usage: LLMUsage = Field(default_factory=LLMUsage)
+    rewrite: QueryRewriteResult

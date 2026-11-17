@@ -9,7 +9,9 @@ from app.api.documents import router as documents_router
 from app.api.rag import router as rag_router
 from app.api.reviews import router as reviews_router
 from app.chat.service import ChatService
+from app.llm.config import get_query_rewrite_settings
 from app.llm.factory import create_llm_gateway
+from app.rag.rewrite import QueryRewriteService
 from app.reviews.reviewer import ClauseReviewService
 from app.reviews.service import ClauseRetrievalService
 from app.reviews.whole_contract_reviewer import WholeContractReviewService
@@ -18,8 +20,18 @@ from app.reviews.whole_contract_reviewer import WholeContractReviewService
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     llm_gateway = create_llm_gateway()
-    app.state.chat_service = ChatService(llm_gateway)
-    app.state.clause_retrieval_service = ClauseRetrievalService()
+    query_rewriter = QueryRewriteService(
+        llm_gateway,
+        get_query_rewrite_settings(),
+    )
+    app.state.query_rewrite_service = query_rewriter
+    app.state.chat_service = ChatService(
+        llm_gateway,
+        query_rewriter=query_rewriter,
+    )
+    app.state.clause_retrieval_service = ClauseRetrievalService(
+        query_rewriter=query_rewriter,
+    )
     app.state.clause_review_service = ClauseReviewService(
         llm_gateway,
         max_output_tokens=4096,

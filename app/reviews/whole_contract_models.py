@@ -3,6 +3,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.llm.models import LLMResponse
 from app.reviews.models import (
     ContractClause,
+    QueryRetrievalResult,
     RetrievedLegalSource,
     RetrievalStatus,
 )
@@ -70,6 +71,7 @@ class WholeContractClauseReviewResult(BaseModel):
     clause: ContractClause
     retrieval_status: RetrievalStatus
     status: ClauseReviewStatus
+    query_results: list[QueryRetrievalResult] = Field(default_factory=list)
     applicability_reason: str | None = None
     assessments: list[WholeContractLegalAssessment] = Field(default_factory=list)
     error_code: str | None = None

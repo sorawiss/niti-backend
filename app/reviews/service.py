@@ -1,5 +1,7 @@
 from app.documents.models import ParsedDocument
+from app.llm.config import QueryRewriteWorkflow
 from app.rag.query import retrieve_laws
+from app.rag.rewrite import QueryRewriteService
 from app.reviews.models import (
     ClauseRetrievalPreparation,
     PreparationStatus,
@@ -15,6 +17,7 @@ class ClauseRetrievalService:
     def __init__(
         self,
         retriever: Retriever = retrieve_laws,
+        query_rewriter: QueryRewriteService | None = None,
         *,
         max_concurrency: int = 1,
         max_query_chars: int = 4000,
@@ -24,6 +27,7 @@ class ClauseRetrievalService:
         )
         self._retriever = ClauseRetriever(
             retriever,
+            query_rewriter,
             max_concurrency=max_concurrency,
         )
 
@@ -32,6 +36,7 @@ class ClauseRetrievalService:
         document: ParsedDocument,
         *,
         top_k: int = 5,
+        workflow: QueryRewriteWorkflow = QueryRewriteWorkflow.CONTRACT_REVIEW,
     ) -> ClauseRetrievalPreparation:
         clauses = segment_contract(document.blocks)
         queries = [
@@ -43,6 +48,7 @@ class ClauseRetrievalService:
             clauses,
             queries,
             top_k=top_k,
+            workflow=workflow,
         )
 
         counts = {

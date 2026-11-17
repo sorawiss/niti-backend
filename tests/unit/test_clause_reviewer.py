@@ -4,6 +4,7 @@ import unittest
 from app.llm.base import LLMGateway
 from app.llm.errors import LLMTimeoutError
 from app.llm.models import LLMRequest, LLMResponse, LLMUsage
+from app.rag.rewrite import QueryRewriteResult
 from app.reviews.models import (
     BoundaryReason,
     ClauseRetrievalPreparation,
@@ -96,6 +97,7 @@ def make_clause_result(
                     else RetrievalStatus.NO_RESULTS
                 ),
                 source_ids=[source.source_id] if with_source else [],
+                rewrite=QueryRewriteResult.disabled(query.text),
             )
         ],
         sources=[source] if with_source else [],

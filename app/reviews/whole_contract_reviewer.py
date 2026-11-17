@@ -284,6 +284,7 @@ class WholeContractReviewService:
             clause=clause_result.clause,
             retrieval_status=clause_result.status,
             status=WholeContractReviewService._derive_status(generated),
+            query_results=clause_result.query_results,
             applicability_reason=generated.applicability_reason,
             assessments=assessments,
         )
@@ -317,6 +318,7 @@ class WholeContractReviewService:
                 clause=result.clause,
                 retrieval_status=result.status,
                 status=ClauseReviewStatus.REVIEW_FAILED,
+                query_results=result.query_results,
                 error_code=error_code,
             )
             for result in preparation.clause_results
@@ -512,6 +514,7 @@ class WholeContractReviewService:
                         clause=clause_result.clause,
                         retrieval_status=clause_result.status,
                         status=ClauseReviewStatus.REVIEW_FAILED,
+                        query_results=clause_result.query_results,
                         error_code="invalid_model_output",
                     )
                 )
@@ -535,6 +538,7 @@ class WholeContractReviewService:
                         clause=clause_result.clause,
                         retrieval_status=clause_result.status,
                         status=ClauseReviewStatus.REVIEW_FAILED,
+                        query_results=clause_result.query_results,
                         error_code=provenance_error,
                     )
                 )

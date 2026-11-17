@@ -3,7 +3,11 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.llm.models import LLMUsage
-from app.reviews.models import ContractClause, RetrievalStatus
+from app.reviews.models import (
+    ContractClause,
+    QueryRetrievalResult,
+    RetrievalStatus,
+)
 
 
 class ClauseReviewStatus(StrEnum):
@@ -144,6 +148,7 @@ class ClauseReviewResult(BaseModel):
     clause: ContractClause
     retrieval_status: RetrievalStatus
     status: ClauseReviewStatus
+    query_results: list[QueryRetrievalResult] = Field(default_factory=list)
     applicability_reason: str | None = None
     assessments: list[LegalAssessment] = Field(default_factory=list)
     evidence_gap: str | None = None

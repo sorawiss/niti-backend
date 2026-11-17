@@ -1,4 +1,5 @@
 import os
+from enum import StrEnum
 from functools import lru_cache
 
 from dotenv import load_dotenv
@@ -33,6 +34,36 @@ class OpenRouterSettings(BaseModel):
     app_name: str | None = "NITI Legal Chat"
 
 
+class QueryRewriteWorkflow(StrEnum):
+    RAG = "rag"
+    CHAT = "chat"
+    CONTRACT_REVIEW = "contract_review"
+    WHOLE_CONTRACT = "whole_contract"
+
+
+class QueryRewriteSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    rag_enabled: bool = False
+    chat_enabled: bool = False
+    contract_review_enabled: bool = False
+    whole_contract_enabled: bool = False
+    model: str = "deepseek/deepseek-v4.1-flash"
+    max_output_tokens: int = Field(default=128, ge=1)
+    timeout_seconds: float = Field(default=8, gt=0)
+    max_concurrency: int = Field(default=4, ge=1)
+    max_query_chars: int = Field(default=1000, ge=1)
+    log_raw_response: bool = False
+
+    def is_enabled(self, workflow: QueryRewriteWorkflow) -> bool:
+        return {
+            QueryRewriteWorkflow.RAG: self.rag_enabled,
+            QueryRewriteWorkflow.CHAT: self.chat_enabled,
+            QueryRewriteWorkflow.CONTRACT_REVIEW: self.contract_review_enabled,
+            QueryRewriteWorkflow.WHOLE_CONTRACT: self.whole_contract_enabled,
+        }[workflow]
+
+
 @lru_cache(maxsize=1)
 def get_openrouter_settings() -> OpenRouterSettings:
     load_dotenv()
@@ -52,4 +83,31 @@ def get_openrouter_settings() -> OpenRouterSettings:
         allow_fallbacks=_read_bool("LLM_ALLOW_FALLBACKS", False),
         app_url=os.getenv("OPENROUTER_APP_URL") or None,
         app_name=os.getenv("OPENROUTER_APP_NAME", "NITI Legal Chat") or None,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_query_rewrite_settings() -> QueryRewriteSettings:
+    load_dotenv()
+    return QueryRewriteSettings(
+        rag_enabled=_read_bool("QUERY_REWRITE_RAG_ENABLED", False),
+        chat_enabled=_read_bool("QUERY_REWRITE_CHAT_ENABLED", False),
+        contract_review_enabled=_read_bool(
+            "QUERY_REWRITE_CONTRACT_REVIEW_ENABLED", False
+        ),
+        whole_contract_enabled=_read_bool(
+            "QUERY_REWRITE_WHOLE_CONTRACT_ENABLED", False
+        ),
+        model=os.getenv(
+            "QUERY_REWRITE_MODEL", "deepseek/deepseek-v4.1-flash"
+        ),
+        max_output_tokens=int(
+            os.getenv("QUERY_REWRITE_MAX_OUTPUT_TOKENS", "128")
+        ),
+        timeout_seconds=float(os.getenv("QUERY_REWRITE_TIMEOUT_SECONDS", "8")),
+        max_concurrency=int(os.getenv("QUERY_REWRITE_MAX_CONCURRENCY", "4")),
+        max_query_chars=int(os.getenv("QUERY_REWRITE_MAX_QUERY_CHARS", "1000")),
+        log_raw_response=_read_bool(
+            "QUERY_REWRITE_LOG_RAW_RESPONSE", False
+        ),
     )

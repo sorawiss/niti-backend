@@ -139,10 +139,14 @@ class OpenRouterGatewayTests(unittest.IsolatedAsyncioTestCase):
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         gateway = OpenRouterGateway(make_settings(), client=client)
-        with self.assertRaises(LLMInvalidResponseError):
+        with self.assertRaises(LLMInvalidResponseError) as context:
             await gateway.generate(
                 LLMRequest(messages=[ChatMessage(role=ChatRole.USER, content="hi")])
             )
+        self.assertEqual(
+            json.loads(context.exception.raw_response),
+            {"choices": []},
+        )
         await client.aclose()
 
 

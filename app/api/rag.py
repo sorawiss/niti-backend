@@ -1,9 +1,13 @@
-from typing import Any
+import asyncio
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.llm.config import QueryRewriteWorkflow
 from app.rag.query import retrieve_laws
+from app.rag.rewrite import QueryRewriteResult, QueryRewriteService
+
 
 
 router = APIRouter(
@@ -39,13 +43,35 @@ class RetrieveResult(BaseModel):
 class RetrieveResponse(BaseModel):
     query: str
     results: list[RetrieveResult]
+    rewrite: QueryRewriteResult
+
+
+def get_query_rewrite_service(request: Request) -> QueryRewriteService:
+    service = getattr(request.app.state, "query_rewrite_service", None)
+    if not isinstance(service, QueryRewriteService):
+        raise RuntimeError("Query rewrite service is not initialized")
+    return service
+
+
+QueryRewriteDependency = Annotated[
+    QueryRewriteService,
+    Depends(get_query_rewrite_service),
+]
 
 
 @router.post("/retrieve", response_model=RetrieveResponse)
-def retrieve(request: RetrieveRequest) -> RetrieveResponse:
+async def retrieve(
+    request: RetrieveRequest,
+    query_rewriter: QueryRewriteDependency,
+) -> RetrieveResponse:
     try:
-        results = retrieve_laws(
-            query=request.query,
+        rewrite = await query_rewriter.rewrite(
+            request.query,
+            workflow=QueryRewriteWorkflow.RAG,
+        )
+        results = await asyncio.to_thread(
+            retrieve_laws,
+            query=rewrite.effective_query,
             top_k=request.top_k,
             law_name=request.law_name,
         )
@@ -53,6 +79,7 @@ def retrieve(request: RetrieveRequest) -> RetrieveResponse:
         return RetrieveResponse(
             query=request.query,
             results=results,
+            rewrite=rewrite,
         )
 
     except Exception as error:

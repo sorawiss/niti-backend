@@ -58,6 +58,7 @@ class ClauseReviewService:
                     clause=clause_result.clause,
                     retrieval_status=clause_result.status,
                     status=ClauseReviewStatus.NEEDS_MORE_EVIDENCE,
+                    query_results=clause_result.query_results,
                     applicability_reason=(
                         "ยังประเมินการใช้กฎหมายกับข้อนี้ไม่ได้เพราะไม่พบหลักฐาน"
                     ),
@@ -212,6 +213,7 @@ class ClauseReviewService:
             clause=clause_result.clause,
             retrieval_status=clause_result.status,
             status=self._derive_status(generated),
+            query_results=clause_result.query_results,
             applicability_reason=generated.applicability_reason,
             assessments=assessments,
             evidence_gap="\n".join(evidence_gaps) or None,
@@ -315,6 +317,7 @@ class ClauseReviewService:
             clause=clause_result.clause,
             retrieval_status=clause_result.status,
             status=ClauseReviewStatus.REVIEW_FAILED,
+            query_results=clause_result.query_results,
             error_code=error_code,
             model=response.model if response else None,
             provider=response.provider if response else None,

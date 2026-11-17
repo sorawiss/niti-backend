@@ -5,7 +5,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.llm.config import QueryRewriteWorkflow
 from app.rag.query import retrieve_laws
+from app.rag.rewrite import QueryRewriteResult, QueryRewriteService
 from app.reviews.models import (
     ClauseQuery,
     ClauseRetrievalResult,
@@ -23,6 +25,7 @@ Retriever = Callable[..., list[dict[str, Any]]]
 @dataclass(frozen=True)
 class _QueryOutcome:
     query: ClauseQuery
+    rewrite: QueryRewriteResult
     raw_results: list[dict[str, Any]] | None = None
     error_code: str | None = None
 
@@ -33,12 +36,14 @@ class ClauseRetriever:
     def __init__(
         self,
         retriever: Retriever = retrieve_laws,
+        query_rewriter: QueryRewriteService | None = None,
         *,
         max_concurrency: int = 1,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be at least 1")
         self._retriever = retriever
+        self._query_rewriter = query_rewriter
         self._max_concurrency = max_concurrency
 
     async def retrieve(
@@ -47,6 +52,7 @@ class ClauseRetriever:
         queries: list[ClauseQuery],
         *,
         top_k: int = 5,
+        workflow: QueryRewriteWorkflow = QueryRewriteWorkflow.CONTRACT_REVIEW,
     ) -> list[ClauseRetrievalResult]:
         if top_k < 1:
             raise ValueError("top_k must be at least 1")
@@ -54,20 +60,33 @@ class ClauseRetriever:
         semaphore = asyncio.Semaphore(self._max_concurrency)
 
         async def run_query(query: ClauseQuery) -> _QueryOutcome:
+            rewrite = (
+                await self._query_rewriter.rewrite(
+                    query.text,
+                    workflow=workflow,
+                )
+                if self._query_rewriter is not None
+                else QueryRewriteResult.disabled(query.text)
+            )
             async with semaphore:
                 try:
                     raw_results = await asyncio.to_thread(
                         self._retriever,
-                        query=query.text,
+                        query=rewrite.effective_query,
                         top_k=top_k,
                         law_name=None,
                     )
                 except Exception as error:  # isolate one retrieval from other clauses
                     return _QueryOutcome(
                         query=query,
+                        rewrite=rewrite,
                         error_code=type(error).__name__,
                     )
-                return _QueryOutcome(query=query, raw_results=raw_results)
+                return _QueryOutcome(
+                    query=query,
+                    rewrite=rewrite,
+                    raw_results=raw_results,
+                )
 
         outcomes = await asyncio.gather(*(run_query(query) for query in queries))
         outcomes_by_clause: dict[str, list[_QueryOutcome]] = {}
@@ -100,6 +119,7 @@ class ClauseRetriever:
                         query_id=outcome.query.query_id,
                         status=RetrievalStatus.FAILED,
                         error_code=outcome.error_code,
+                        rewrite=outcome.rewrite,
                     )
                 )
                 continue
@@ -146,6 +166,7 @@ class ClauseRetriever:
                     ),
                     source_ids=unique_source_ids,
                     invalid_result_count=invalid_result_count,
+                    rewrite=outcome.rewrite,
                 )
             )
 

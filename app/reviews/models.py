@@ -2,6 +2,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.rag.rewrite import QueryRewriteResult
+
 
 class BoundaryReason(StrEnum):
     DOCUMENT_START = "document_start"
@@ -76,6 +78,7 @@ class QueryRetrievalResult(BaseModel):
     source_ids: list[str] = Field(default_factory=list)
     invalid_result_count: int = Field(default=0, ge=0)
     error_code: str | None = None
+    rewrite: QueryRewriteResult
 
 
 class ClauseRetrievalResult(BaseModel):

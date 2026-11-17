@@ -12,8 +12,10 @@ from app.chat.models import (
 )
 from app.chat.prompts import build_rag_messages
 from app.llm.base import LLMGateway
+from app.llm.config import QueryRewriteWorkflow
 from app.llm.models import LLMRequest
 from app.rag.query import retrieve_laws
+from app.rag.rewrite import QueryRewriteResult, QueryRewriteService
 
 
 Retriever = Callable[..., list[dict[str, Any]]]
@@ -28,9 +30,11 @@ class ChatService:
         self,
         llm_gateway: LLMGateway,
         retriever: Retriever = retrieve_laws,
+        query_rewriter: QueryRewriteService | None = None,
     ) -> None:
         self._llm_gateway = llm_gateway
         self._retriever = retriever
+        self._query_rewriter = query_rewriter
 
     async def answer(
         self,
@@ -39,9 +43,17 @@ class ChatService:
         top_k: int = 5,
         law_name: str | None = None,
     ) -> ChatWorkflowResult:
+        rewrite = (
+            await self._query_rewriter.rewrite(
+                question,
+                workflow=QueryRewriteWorkflow.CHAT,
+            )
+            if self._query_rewriter is not None
+            else QueryRewriteResult.disabled(question)
+        )
         raw_results = await asyncio.to_thread(
             self._retriever,
-            query=question,
+            query=rewrite.effective_query,
             top_k=top_k,
             law_name=law_name,
         )
@@ -53,6 +65,7 @@ class ChatService:
                 answer="ไม่พบข้อมูลกฎหมายที่เกี่ยวข้องเพียงพอสำหรับตอบคำถามนี้",
                 citations=[],
                 requires_human_review=True,
+                rewrite=rewrite,
             )
 
         llm_response = await self._llm_gateway.generate(
@@ -91,6 +104,7 @@ class ChatService:
                 model=llm_response.model,
                 provider=llm_response.provider,
                 usage=llm_response.usage,
+                rewrite=rewrite,
             )
 
         return ChatWorkflowResult(
@@ -101,6 +115,7 @@ class ChatService:
             model=llm_response.model,
             provider=llm_response.provider,
             usage=llm_response.usage,
+            rewrite=rewrite,
         )
 
     @staticmethod

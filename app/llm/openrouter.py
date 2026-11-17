@@ -134,6 +134,7 @@ class OpenRouterGateway(LLMGateway):
                 "The language model returned an unexpected response",
                 code="llm_invalid_response",
                 status_code=response.status_code,
+                raw_response=response.text,
             ) from error
 
     @staticmethod
@@ -156,6 +157,7 @@ class OpenRouterGateway(LLMGateway):
                 message,
                 code="llm_authentication_error",
                 status_code=status,
+                raw_response=response.text,
             )
         if status == 429:
             raise LLMRateLimitError(
@@ -163,6 +165,7 @@ class OpenRouterGateway(LLMGateway):
                 code="llm_rate_limit",
                 status_code=status,
                 retryable=True,
+                raw_response=response.text,
             )
         if status in {408, 524}:
             raise LLMTimeoutError(
@@ -170,6 +173,7 @@ class OpenRouterGateway(LLMGateway):
                 code="llm_timeout",
                 status_code=status,
                 retryable=True,
+                raw_response=response.text,
             )
         if status >= 500 or status == 529:
             raise LLMUpstreamError(
@@ -177,9 +181,11 @@ class OpenRouterGateway(LLMGateway):
                 code="llm_upstream_error",
                 status_code=status,
                 retryable=True,
+                raw_response=response.text,
             )
         raise LLMRequestError(
             message,
             code="llm_request_error",
             status_code=status,
+            raw_response=response.text,
         )

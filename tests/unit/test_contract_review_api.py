@@ -11,6 +11,7 @@ from app.api.reviews import (
 )
 from app.api.uploads import MAX_FILE_SIZE
 from app.documents.models import ParsedDocument
+from app.llm.config import QueryRewriteWorkflow
 from app.main import app
 from app.reviews.models import (
     BoundaryReason,
@@ -130,13 +131,16 @@ class FakeRetrievalService:
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error
         self.top_k: int | None = None
+        self.workflow = None
 
     async def prepare(
         self,
         document: ParsedDocument,
         *,
         top_k: int = 5,
+        workflow=None,
     ) -> ParsedDocument:
+        self.workflow = workflow
         self.top_k = top_k
         if self.error is not None:
             raise self.error
@@ -191,6 +195,10 @@ class ContractReviewApiTests(unittest.TestCase):
         self.assertEqual(result["status"], "ready")
         self.assertEqual(result["clause_reviews"][0]["clause"]["number"], "1")
         self.assertEqual(retrieval.top_k, 5)
+        self.assertEqual(
+            retrieval.workflow,
+            QueryRewriteWorkflow.CONTRACT_REVIEW,
+        )
         self.assertNotIn("contract_excerpt", json.dumps(result))
 
     def test_document_blocks_preserve_parser_order_type_text_and_style(self) -> None:

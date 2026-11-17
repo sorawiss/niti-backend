@@ -7,6 +7,7 @@ from app.api.reviews import (
     get_whole_contract_review_service,
 )
 from app.main import app
+from app.llm.config import QueryRewriteWorkflow
 from app.reviews.whole_contract_reviewer import WholeContractReviewService
 from tests.unit.test_clause_reviewer import (
     FakeGateway,
@@ -23,9 +24,11 @@ client = TestClient(app)
 class FakeWholeContractRetrievalService:
     def __init__(self) -> None:
         self.top_k: int | None = None
+        self.workflow = None
 
-    async def prepare(self, document, *, top_k: int = 5):
+    async def prepare(self, document, *, top_k: int = 5, workflow=None):
         self.top_k = top_k
+        self.workflow = workflow
         return make_preparation([make_clause_result("clause-0001")])
 
 
@@ -56,6 +59,10 @@ class WholeContractReviewApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
+        self.assertEqual(
+            retrieval.workflow,
+            QueryRewriteWorkflow.WHOLE_CONTRACT,
+        )
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(retrieval.top_k, 5)
         self.assertEqual(len(gateway.requests), 1)
@@ -75,6 +82,10 @@ class WholeContractReviewApiTests(unittest.TestCase):
         self.assertEqual(
             payload["evidence_mappings"][0]["clause_id"],
             "clause-0001",
+        )
+        self.assertEqual(
+            payload["clause_reviews"][0]["query_results"][0]["rewrite"]["status"],
+            "disabled",
         )
         self.assertIn("document_blocks", payload)
         self.assertNotIn("llm_debug", payload)
