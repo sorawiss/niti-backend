@@ -101,6 +101,11 @@ class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         ]["properties"]
         self.assertNotIn("evidence_gap", assessment_properties)
         self.assertNotIn("suggested_revision", assessment_properties)
+        citation_source_schema = schema["$defs"]["GeneratedLegalCitation"][
+            "properties"
+        ]["source_id"]
+        self.assertEqual(citation_source_schema["enum"], ["law:overtime"])
+        self.assertIn("opaque identifier", gateway.requests[0].messages[0].content)
         completeness_schema = schema["properties"]["completeness"]
         self.assertEqual(completeness_schema["minItems"], 8)
         self.assertEqual(completeness_schema["maxItems"], 8)
@@ -226,12 +231,65 @@ class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         raw = whole_review_json(["clause-0001"], source_id="law:invented")
         gateway = FakeGateway([raw])
 
-        result = await WholeContractReviewService(gateway).review(
-            make_preparation([make_clause_result("clause-0001")])
-        )
+        with self.assertLogs("uvicorn.error", level="WARNING") as captured:
+            result = await WholeContractReviewService(gateway).review(
+                make_preparation([make_clause_result("clause-0001")])
+            )
 
         self.assertEqual(result.llm_debug.error_code, "unknown_citation")
         self.assertEqual(result.llm_debug.response.content, raw)
+        logged = json.loads(
+            captured.output[0].split("whole_contract_validation=", 1)[1]
+        )
+        self.assertEqual(
+            logged["invalid_citations"],
+            [
+                {
+                    "clause_id": "clause-0001",
+                    "assessment_id": "assessment-01",
+                    "source_id": "law:invented",
+                }
+            ],
+        )
+        self.assertNotIn("Employee", captured.output[0])
+
+    async def test_unknown_citation_only_fails_its_clause(self) -> None:
+        payload = json.loads(
+            whole_review_json(["clause-0001", "clause-0002"])
+        )
+        payload["clause_reviews"][1]["assessments"][0]["citations"][0][
+            "source_id"
+        ] = "law:invented"
+        gateway = FakeGateway([json.dumps(payload)])
+
+        with self.assertLogs("uvicorn.error", level="WARNING"):
+            result = await WholeContractReviewService(gateway).review(
+                make_preparation(
+                    [
+                        make_clause_result("clause-0001"),
+                        make_clause_result("clause-0002"),
+                    ]
+                )
+            )
+
+        self.assertEqual(result.status, ReviewRunStatus.PARTIAL)
+        self.assertEqual(
+            result.clause_reviews[0].status,
+            ClauseReviewStatus.NO_ISSUE_FOUND,
+        )
+        self.assertEqual(
+            result.clause_reviews[1].status,
+            ClauseReviewStatus.REVIEW_FAILED,
+        )
+        self.assertEqual(
+            result.clause_reviews[1].error_code,
+            "unknown_citation",
+        )
+        self.assertEqual(
+            result.llm_debug.error_code,
+            "partial_unknown_citation",
+        )
+        self.assertEqual(len(result.completeness), 8)
 
     async def test_unknown_supporting_clause_is_rejected(self) -> None:
         payload = json.loads(whole_review_json(["clause-0001"]))

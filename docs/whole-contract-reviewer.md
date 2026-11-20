@@ -13,9 +13,12 @@ legal source, and the clause-to-query-to-source mappings. Evidence is neither
 summarized nor truncated by the review service.
 
 The backend rejects the complete generated result when it has invalid JSON or
-schema, duplicate or missing clause IDs, unknown citation IDs, duplicate
-assessment IDs within a clause, unknown supporting contract clause IDs, or an
-assessment that does not include its own reviewed clause as support.
+schema, duplicate or missing clause IDs, or invalid completeness coverage. The
+per-request JSON schema restricts citations to the exact source IDs returned by
+retrieval. If clause-level provenance still fails validation, only the affected
+clause is marked `review_failed`; valid clause reviews and completeness remain
+available, and the overall result is `partial`. Validation logs contain IDs and
+locations but never contract or legal-source text.
 
 The same LLM response also includes a `completeness` array for the eight fixed
 employment-contract categories. Each item contains only `category`, the fixed

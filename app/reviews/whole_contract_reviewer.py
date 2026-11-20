@@ -67,7 +67,7 @@ class WholeContractReviewService:
                         evidence_mappings,
                     ),
                     max_output_tokens=self._max_output_tokens,
-                    response_format=self._response_format(),
+                    response_format=self._response_format(unique_sources),
                 )
             )
         except LLMGatewayError as error:
@@ -102,51 +102,106 @@ class WholeContractReviewService:
                 error,
             )
 
-        provenance_error = self._validate_provenance(
-            generated,
-            preparation,
-            unique_sources,
-        )
-        if provenance_error is not None:
+        coverage_error = self._validate_clause_coverage(generated, preparation)
+        if coverage_error is not None:
+            issue = ReviewValidationIssue(
+                error_type=coverage_error,
+                location=["provenance"],
+                message=self._provenance_error_message(coverage_error),
+            )
+            self._log_validation_failure(
+                response,
+                generated,
+                [issue],
+                {source.source_id for source in unique_sources},
+            )
             return self._failed_result(
                 preparation,
                 unique_sources,
                 evidence_mappings,
-                error_code=provenance_error,
+                error_code=coverage_error,
                 response=response,
-                validation_errors=[
-                    ReviewValidationIssue(
-                        error_type=provenance_error,
-                        location=["provenance"],
-                        message=self._provenance_error_message(provenance_error),
-                    )
-                ],
+                validation_errors=[issue],
             )
 
         sources_by_id = {source.source_id: source for source in unique_sources}
+        valid_clause_ids = {
+            result.clause.clause_id for result in preparation.clause_results
+        }
         generated_by_id = {
             review.clause_id: review for review in generated.clause_reviews
         }
-        clause_reviews = [
-            self._hydrate_clause_review(
-                generated_by_id[result.clause.clause_id],
-                result,
-                sources_by_id,
+        clause_reviews: list[WholeContractClauseReviewResult] = []
+        validation_errors: list[ReviewValidationIssue] = []
+        for index, clause_result in enumerate(preparation.clause_results):
+            generated_review = generated_by_id[clause_result.clause.clause_id]
+            provenance_error = self._validate_clause_provenance(
+                generated_review,
+                valid_clause_ids,
+                set(sources_by_id),
             )
-            for result in preparation.clause_results
-        ]
+            if provenance_error is not None:
+                validation_errors.append(
+                    ReviewValidationIssue(
+                        error_type=provenance_error,
+                        location=["clause_reviews", index, "provenance"],
+                        message=self._provenance_error_message(provenance_error),
+                    )
+                )
+                clause_reviews.append(
+                    WholeContractClauseReviewResult(
+                        clause=clause_result.clause,
+                        retrieval_status=clause_result.status,
+                        status=ClauseReviewStatus.REVIEW_FAILED,
+                        query_results=clause_result.query_results,
+                        error_code=provenance_error,
+                    )
+                )
+                continue
+            clause_reviews.append(
+                self._hydrate_clause_review(
+                    generated_review,
+                    clause_result,
+                    sources_by_id,
+                )
+            )
+
+        failed_count = sum(
+            review.status == ClauseReviewStatus.REVIEW_FAILED
+            for review in clause_reviews
+        )
+        run_status = (
+            ReviewRunStatus.READY
+            if failed_count == 0
+            else ReviewRunStatus.FAILED
+            if failed_count == len(clause_reviews)
+            else ReviewRunStatus.PARTIAL
+        )
+        if validation_errors:
+            self._log_validation_failure(
+                response,
+                generated,
+                validation_errors,
+                set(sources_by_id),
+            )
         return WholeContractReviewResult(
             document_id=preparation.document_id,
             filename=preparation.filename,
-            status=ReviewRunStatus.READY,
+            status=run_status,
             clause_reviews=clause_reviews,
             summary=self._summary(clause_reviews),
             completeness=generated.completeness,
             unique_legal_sources=unique_sources,
             evidence_mappings=evidence_mappings,
             llm_debug=WholeContractLLMDebug(
-                accepted=True,
+                accepted=not validation_errors,
+                error_code=self._review_error_code(
+                    validation_errors,
+                    failed_count,
+                    len(clause_reviews),
+                ),
                 response=response,
+                validation_errors=validation_errors,
             ),
         )
 
@@ -207,10 +262,9 @@ class WholeContractReviewService:
         return mappings
 
     @staticmethod
-    def _validate_provenance(
+    def _validate_clause_coverage(
         generated: GeneratedWholeContractReview,
         preparation: ClauseRetrievalPreparation,
-        unique_sources: list[RetrievedLegalSource],
     ) -> str | None:
         expected_clause_ids = [
             result.clause.clause_id for result in preparation.clause_results
@@ -222,31 +276,6 @@ class WholeContractReviewService:
             return "duplicate_clause_id"
         if set(returned_clause_ids) != set(expected_clause_ids):
             return "clause_coverage_mismatch"
-
-        valid_clause_ids = set(expected_clause_ids)
-        valid_source_ids = {source.source_id for source in unique_sources}
-        for review in generated.clause_reviews:
-            assessment_ids = [
-                assessment.assessment_id for assessment in review.assessments
-            ]
-            if len(assessment_ids) != len(set(assessment_ids)):
-                return "duplicate_assessment_id"
-            for assessment in review.assessments:
-                if any(
-                    citation.source_id not in valid_source_ids
-                    for citation in assessment.citations
-                ):
-                    return "unknown_citation"
-                if any(
-                    clause_id not in valid_clause_ids
-                    for clause_id in assessment.supporting_contract_clause_ids
-                ):
-                    return "unknown_supporting_contract_clause"
-                if (
-                    review.clause_id
-                    not in assessment.supporting_contract_clause_ids
-                ):
-                    return "missing_reviewed_clause_support"
         return None
 
     @staticmethod
@@ -424,15 +453,23 @@ class WholeContractReviewService:
         )
 
     @staticmethod
-    def _response_format() -> dict[str, Any]:
+    def _response_format(
+        unique_sources: list[RetrievedLegalSource],
+    ) -> dict[str, Any]:
+        schema = GeneratedWholeContractReview.model_json_schema()
+        source_ids = [source.source_id for source in unique_sources]
+        if source_ids:
+            citation_schema = schema["$defs"]["GeneratedLegalCitation"]
+            citation_schema["properties"]["source_id"]["enum"] = source_ids
         return {
             "type": "json_schema",
             "json_schema": {
                 "name": "whole_contract_legal_review",
                 "strict": True,
-                "schema": GeneratedWholeContractReview.model_json_schema(),
+                "schema": schema,
             },
         }
+
     def _recover_clause_results(
         self,
         preparation: ClauseRetrievalPreparation,
@@ -582,6 +619,12 @@ class WholeContractReviewService:
             if failed_count == len(clause_reviews)
             else ReviewRunStatus.PARTIAL
         )
+        self._log_validation_failure(
+            response,
+            None,
+            validation_errors,
+            set(sources_by_id),
+        )
         return WholeContractReviewResult(
             document_id=preparation.document_id,
             filename=preparation.filename,
@@ -594,9 +637,12 @@ class WholeContractReviewService:
             llm_debug=WholeContractLLMDebug(
                 accepted=False,
                 error_code=(
-                    "invalid_model_output"
-                    if run_status == ReviewRunStatus.FAILED
-                    else "partial_invalid_model_output"
+                    self._review_error_code(
+                        validation_errors,
+                        failed_count,
+                        len(clause_reviews),
+                    )
+                    or "invalid_model_output"
                 ),
                 response=response,
                 validation_errors=validation_errors,
@@ -631,6 +677,77 @@ class WholeContractReviewService:
             ):
                 return "missing_reviewed_clause_support"
         return None
+
+    @staticmethod
+    def _review_error_code(
+        validation_errors: list[ReviewValidationIssue],
+        failed_count: int,
+        clause_count: int,
+    ) -> str | None:
+        if not validation_errors:
+            return None
+        error_types = {issue.error_type for issue in validation_errors}
+        provenance_error_types = {
+            "duplicate_assessment_id",
+            "unknown_citation",
+            "unknown_supporting_contract_clause",
+            "missing_reviewed_clause_support",
+        }
+        base_code = (
+            next(iter(error_types))
+            if len(error_types) == 1
+            and error_types.issubset(provenance_error_types)
+            else "invalid_model_output"
+        )
+        if failed_count < clause_count:
+            return f"partial_{base_code}"
+        return base_code
+
+    @staticmethod
+    def _log_validation_failure(
+        response: LLMResponse,
+        generated: GeneratedWholeContractReview | None,
+        validation_errors: list[ReviewValidationIssue],
+        valid_source_ids: set[str],
+    ) -> None:
+        invalid_citations: list[dict[str, str]] = []
+        if generated is not None:
+            invalid_citations = [
+                {
+                    "clause_id": review.clause_id,
+                    "assessment_id": assessment.assessment_id,
+                    "source_id": citation.source_id,
+                }
+                for review in generated.clause_reviews
+                for assessment in review.assessments
+                for citation in assessment.citations
+                if citation.source_id not in valid_source_ids
+            ]
+        logger.warning(
+            "whole_contract_validation=%s",
+            json.dumps(
+                {
+                    "event": "whole_contract_validation_failed",
+                    "request_id": response.request_id,
+                    "model": response.model,
+                    "provider": response.provider,
+                    "error_codes": sorted(
+                        {issue.error_type for issue in validation_errors}
+                    ),
+                    "issues": [
+                        {
+                            "error_type": issue.error_type,
+                            "location": issue.location,
+                        }
+                        for issue in validation_errors
+                    ],
+                    "invalid_citations": invalid_citations,
+                    "valid_source_count": len(valid_source_ids),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
 
     @staticmethod
     def _log_model_usage(response: LLMResponse) -> None:
