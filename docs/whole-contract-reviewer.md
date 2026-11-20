@@ -17,6 +17,14 @@ schema, duplicate or missing clause IDs, unknown citation IDs, duplicate
 assessment IDs within a clause, unknown supporting contract clause IDs, or an
 assessment that does not include its own reviewed clause as support.
 
+The same LLM response also includes a `completeness` array for the eight fixed
+employment-contract categories. Each item contains only `category`, the fixed
+Thai `label`, `status`, and a Thai `summary`. The backend requires every category
+exactly once in the defined order and accepts only `complete`, `partial`,
+`missing`, `not_applicable`, or `uncertain` as status values. Completeness is
+separate from the cited legal assessment: finding a clause does not establish
+that the clause complies with law.
+
 ## Complete LLM response for debugging
 
 Raw provider output is deliberately not returned by the public HTTP endpoint.

@@ -66,6 +66,11 @@ class WholeContractReviewApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(retrieval.top_k, 5)
         self.assertEqual(len(gateway.requests), 1)
+        self.assertEqual(len(payload["completeness"]), 8)
+        self.assertEqual(
+            set(payload["completeness"][0]),
+            {"category", "label", "status", "summary"},
+        )
         self.assertEqual(
             payload["clause_reviews"][0]["assessments"][0][
                 "supporting_contract_clause_ids"

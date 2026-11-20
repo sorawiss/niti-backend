@@ -141,6 +141,7 @@ class WholeContractReviewService:
             status=ReviewRunStatus.READY,
             clause_reviews=clause_reviews,
             summary=self._summary(clause_reviews),
+            completeness=generated.completeness,
             unique_legal_sources=unique_sources,
             evidence_mappings=evidence_mappings,
             llm_debug=WholeContractLLMDebug(
@@ -456,12 +457,32 @@ class WholeContractReviewService:
         raw_reviews = (
             payload.get("clause_reviews") if isinstance(payload, dict) else None
         )
+        raw_completeness = (
+            payload.get("completeness") if isinstance(payload, dict) else None
+        )
         if (
             not isinstance(payload, dict)
-            or set(payload) != {"clause_reviews"}
+            or set(payload) != {"clause_reviews", "completeness"}
             or not isinstance(raw_reviews, list)
             or not all(isinstance(item, dict) for item in raw_reviews)
         ):
+            return self._failed_result(
+                preparation,
+                unique_sources,
+                evidence_mappings,
+                error_code="invalid_model_output",
+                response=response,
+                validation_errors=self._validation_issues(whole_error),
+            )
+
+        try:
+            completeness = GeneratedWholeContractReview.model_validate(
+                {
+                    "clause_reviews": [],
+                    "completeness": raw_completeness,
+                }
+            ).completeness
+        except ValidationError:
             return self._failed_result(
                 preparation,
                 unique_sources,
@@ -567,6 +588,7 @@ class WholeContractReviewService:
             status=run_status,
             clause_reviews=clause_reviews,
             summary=self._summary(clause_reviews),
+            completeness=completeness,
             unique_legal_sources=unique_sources,
             evidence_mappings=evidence_mappings,
             llm_debug=WholeContractLLMDebug(

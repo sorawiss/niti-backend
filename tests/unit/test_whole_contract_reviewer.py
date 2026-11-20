@@ -3,6 +3,7 @@ import unittest
 
 from app.llm.models import LLMResponse, LLMUsage
 from app.reviews.review_models import ClauseReviewStatus, ReviewRunStatus
+from app.reviews.whole_contract_models import COMPLETENESS_CATEGORY_LABELS
 from app.reviews.whole_contract_reviewer import WholeContractReviewService
 from tests.unit.test_clause_reviewer import (
     FakeGateway,
@@ -26,6 +27,18 @@ def whole_assessment(
 
 
 
+def completeness_items() -> list[dict[str, str]]:
+    return [
+        {
+            "category": category.value,
+            "label": label,
+            "status": "complete",
+            "summary": "\u0e1e\u0e1a\u0e02\u0e49\u0e2d\u0e01\u0e33\u0e2b\u0e19\u0e14\u0e04\u0e23\u0e1a\u0e16\u0e49\u0e27\u0e19",
+        }
+        for category, label in COMPLETENESS_CATEGORY_LABELS.items()
+    ]
+
+
 def whole_review_json(
     clause_ids: list[str],
     *,
@@ -46,7 +59,8 @@ def whole_review_json(
                     ],
                 }
                 for index, clause_id in enumerate(clause_ids, start=1)
-            ]
+            ],
+            "completeness": completeness_items(),
         }
     )
 
@@ -87,9 +101,104 @@ class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         ]["properties"]
         self.assertNotIn("evidence_gap", assessment_properties)
         self.assertNotIn("suggested_revision", assessment_properties)
+        completeness_schema = schema["properties"]["completeness"]
+        self.assertEqual(completeness_schema["minItems"], 8)
+        self.assertEqual(completeness_schema["maxItems"], 8)
+        completeness_properties = schema["$defs"][
+            "ContractCompletenessItem"
+        ]["properties"]
+        self.assertEqual(
+            set(completeness_properties),
+            {"category", "label", "status", "summary"},
+        )
+        self.assertEqual(len(result.completeness), 8)
+        self.assertEqual(
+            [item.category.value for item in result.completeness],
+            list(COMPLETENESS_CATEGORY_LABELS),
+        )
+        self.assertIn("parties_information", gateway.requests[0].messages[0].content)
         self.assertTrue(result.llm_debug.accepted)
         self.assertEqual(result.llm_debug.response.content, raw)
         self.assertEqual(result.llm_debug.response.request_id, "test-request-1")
+
+    async def test_all_completeness_statuses_are_accepted(self) -> None:
+        payload = json.loads(whole_review_json(["clause-0001"]))
+        statuses = [
+            "complete",
+            "partial",
+            "missing",
+            "not_applicable",
+            "uncertain",
+        ]
+        for index, status in enumerate(statuses):
+            payload["completeness"][index]["status"] = status
+            payload["completeness"][index]["summary"] = (
+                f"summary for {status}"
+            )
+        gateway = FakeGateway([json.dumps(payload)])
+
+        result = await WholeContractReviewService(gateway).review(
+            make_preparation([make_clause_result("clause-0001")])
+        )
+
+        self.assertEqual(result.status, ReviewRunStatus.READY)
+        self.assertEqual(
+            [item.status.value for item in result.completeness[:5]],
+            statuses,
+        )
+
+    async def test_invalid_completeness_is_rejected(self) -> None:
+        base_payload = json.loads(whole_review_json(["clause-0001"]))
+        invalid_payloads: dict[str, dict[str, object]] = {}
+
+        missing = json.loads(json.dumps(base_payload))
+        missing["completeness"].pop()
+        invalid_payloads["missing category"] = missing
+
+        duplicate = json.loads(json.dumps(base_payload))
+        duplicate["completeness"][-1] = duplicate["completeness"][0]
+        invalid_payloads["duplicate category"] = duplicate
+
+        reordered = json.loads(json.dumps(base_payload))
+        reordered["completeness"][0], reordered["completeness"][1] = (
+            reordered["completeness"][1],
+            reordered["completeness"][0],
+        )
+        invalid_payloads["wrong order"] = reordered
+
+        unknown = json.loads(json.dumps(base_payload))
+        unknown["completeness"][0]["category"] = "unknown"
+        invalid_payloads["unknown category"] = unknown
+
+        blank = json.loads(json.dumps(base_payload))
+        blank["completeness"][0]["summary"] = "   "
+        invalid_payloads["blank summary"] = blank
+
+        wrong_label = json.loads(json.dumps(base_payload))
+        wrong_label["completeness"][0]["label"] = "Wrong label"
+        invalid_payloads["wrong fixed label"] = wrong_label
+
+        invalid_status = json.loads(json.dumps(base_payload))
+        invalid_status["completeness"][0]["status"] = "mostly_complete"
+        invalid_payloads["invalid status"] = invalid_status
+
+        extra = json.loads(json.dumps(base_payload))
+        extra["completeness"][0]["evidence"] = []
+        invalid_payloads["extra field"] = extra
+
+        for case, payload in invalid_payloads.items():
+            with self.subTest(case=case):
+                gateway = FakeGateway([json.dumps(payload)])
+                result = await WholeContractReviewService(gateway).review(
+                    make_preparation([make_clause_result("clause-0001")])
+                )
+
+                self.assertEqual(result.status, ReviewRunStatus.FAILED)
+                self.assertEqual(
+                    result.llm_debug.error_code,
+                    "invalid_model_output",
+                )
+                self.assertEqual(result.completeness, [])
 
     async def test_missing_clause_rejects_entire_response(self) -> None:
         gateway = FakeGateway([whole_review_json(["clause-0001"])])
@@ -163,7 +272,8 @@ class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
                             }
                         ],
                     }
-                ]
+                ],
+                "completeness": completeness_items(),
             }
         )
         gateway = FakeGateway([raw])
