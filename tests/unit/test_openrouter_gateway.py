@@ -4,7 +4,7 @@ import unittest
 import httpx
 from pydantic import SecretStr
 
-from app.llm.config import OpenRouterSettings
+from app.llm.config import OpenRouterSettings, ReasoningEffort
 from app.llm.errors import (
     LLMAuthenticationError,
     LLMInvalidResponseError,
@@ -26,6 +26,42 @@ def make_settings() -> OpenRouterSettings:
 
 
 class OpenRouterGatewayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reasoning_effort_is_sent_from_settings(self) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content)
+            self.assertEqual(
+                payload["reasoning"],
+                {"effort": "low", "exclude": True},
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "id": "generation-reasoning",
+                    "model": "deepseek/deepseek-v4.1-flash",
+                    "choices": [
+                        {
+                            "message": {"content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                },
+            )
+
+        configured_settings = make_settings().model_copy(
+            update={
+                "model": "deepseek/deepseek-v4.1-flash",
+                "reasoning_effort": ReasoningEffort.LOW,
+            }
+        )
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        gateway = OpenRouterGateway(configured_settings, client=client)
+
+        await gateway.generate(
+            LLMRequest(messages=[ChatMessage(role=ChatRole.USER, content="hi")])
+        )
+
+        await client.aclose()
+
     async def test_generate_maps_request_and_response(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
             self.assertEqual(request.headers["authorization"], "Bearer test-key")

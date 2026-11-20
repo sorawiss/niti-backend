@@ -19,6 +19,16 @@ def _read_bool(name: str, default: bool) -> bool:
     raise ValueError(f"{name} must be a boolean value")
 
 
+class ReasoningEffort(StrEnum):
+    NONE = "none"
+    MINIMAL = "minimal"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
+
+
 class OpenRouterSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -27,6 +37,7 @@ class OpenRouterSettings(BaseModel):
     base_url: str = "https://openrouter.ai/api/v1"
     temperature: float = Field(default=0, ge=0, le=2)
     max_output_tokens: int = Field(default=1200, ge=1)
+    reasoning_effort: ReasoningEffort | None = None
     timeout_seconds: float = Field(default=60, gt=0)
     zero_data_retention: bool = True
     allow_fallbacks: bool = False
@@ -78,6 +89,7 @@ def get_openrouter_settings() -> OpenRouterSettings:
         base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         temperature=float(os.getenv("LLM_TEMPERATURE", "0")),
         max_output_tokens=int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "1200")),
+        reasoning_effort=os.getenv("LLM_REASONING_EFFORT") or None,
         timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "60")),
         zero_data_retention=_read_bool("LLM_ZERO_DATA_RETENTION", True),
         allow_fallbacks=_read_bool("LLM_ALLOW_FALLBACKS", False),

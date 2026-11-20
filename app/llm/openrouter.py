@@ -3,7 +3,7 @@ from typing import Any
 import httpx
 
 from app.llm.base import LLMGateway
-from app.llm.config import OpenRouterSettings
+from app.llm.config import OpenRouterSettings, ReasoningEffort
 from app.llm.errors import (
     LLMAuthenticationError,
     LLMInvalidResponseError,
@@ -90,7 +90,6 @@ class OpenRouterGateway(LLMGateway):
         }
         if model.startswith("openai/gpt-5"):
             payload["max_completion_tokens"] = max_output_tokens
-            payload["reasoning"] = {"effort": "low", "exclude": True}
         else:
             payload["max_tokens"] = max_output_tokens
             payload["temperature"] = (
@@ -98,12 +97,25 @@ class OpenRouterGateway(LLMGateway):
                 if request.temperature is not None
                 else self._settings.temperature
             )
+        reasoning_effort = self._reasoning_effort(model)
+        if reasoning_effort is not None:
+            payload["reasoning"] = {
+                "effort": reasoning_effort.value,
+                "exclude": True,
+            }
         if request.response_format is not None:
             payload["response_format"] = request.response_format
             payload["provider"]["require_parameters"] = True
         if request.user_id:
             payload["user"] = request.user_id
         return payload
+
+    def _reasoning_effort(self, model: str) -> ReasoningEffort | None:
+        if self._settings.reasoning_effort is not None:
+            return self._settings.reasoning_effort
+        if model.startswith("openai/gpt-5"):
+            return ReasoningEffort.LOW
+        return None
 
     def _parse_response(self, response: httpx.Response) -> LLMResponse:
         try:

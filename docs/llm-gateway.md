@@ -35,6 +35,8 @@ Important defaults:
 ```env
 LLM_PROVIDER=openrouter
 OPENROUTER_MODEL=openai/gpt-5-mini
+LLM_MAX_OUTPUT_TOKENS=1200
+LLM_REASONING_EFFORT=low
 LLM_ZERO_DATA_RETENTION=true
 LLM_ALLOW_FALLBACKS=false
 ```
@@ -43,6 +45,14 @@ LLM_ALLOW_FALLBACKS=false
 `allow_fallbacks=false` prevents OpenRouter from silently trying a different
 provider endpoint when the preferred route is unavailable. Model identity is
 still returned and should be recorded with every future chat response.
+
+`LLM_REASONING_EFFORT` is optional and accepts `none`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, or `max`. When set, the gateway forwards it through
+OpenRouter's `reasoning.effort` parameter and excludes reasoning text from the
+response. Reasoning tokens still count toward `LLM_MAX_OUTPUT_TOKENS`, so leave
+enough output budget for the final answer or structured JSON. If the variable
+is omitted, GPT-5 keeps its existing `low` default and other models use their
+provider default.
 
 ## Use it from Python
 
