@@ -1,3 +1,5 @@
+from enum import StrEnum
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.llm.models import LLMResponse
@@ -45,12 +47,70 @@ class GeneratedWholeContractClauseReview(GeneratedClauseReview):
     assessments: list[GeneratedWholeContractAssessment]
 
 
+class ContractFindingType(StrEnum):
+    MISSING_TERM = "missing_term"
+    CROSS_CLAUSE_CONFLICT = "cross_clause_conflict"
+    CONTRACT_WIDE_RISK = "contract_wide_risk"
+    DRAFTING_ISSUE = "drafting_issue"
+
+
+class GeneratedContractFinding(BaseModel):
+    """A material finding that cannot honestly belong to one clause review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    finding_id: str = Field(min_length=1)
+    finding_type: ContractFindingType
+    outcome: LegalAssessmentOutcome
+    issue: str = Field(min_length=1)
+    reasoning: str = Field(min_length=1)
+    citations: list[GeneratedLegalCitation]
+    confidence: AssessmentConfidence
+    supporting_contract_clause_ids: list[str]
+
+    @model_validator(mode="after")
+    def validate_finding(self) -> "GeneratedContractFinding":
+        if (
+            self.outcome != LegalAssessmentOutcome.NEEDS_MORE_EVIDENCE
+            and not self.citations
+        ):
+            raise ValueError(f"{self.outcome.value} requires a citation")
+        if (
+            self.finding_type == ContractFindingType.MISSING_TERM
+            and self.supporting_contract_clause_ids
+        ):
+            raise ValueError("missing_term must not cite a contract clause")
+        if (
+            self.finding_type != ContractFindingType.MISSING_TERM
+            and not self.supporting_contract_clause_ids
+        ):
+            raise ValueError(
+                f"{self.finding_type.value} requires a supporting contract clause"
+            )
+        return self
+
+
 class GeneratedWholeContractReview(BaseModel):
     """The single structured response requested for the entire contract."""
 
     model_config = ConfigDict(extra="forbid")
 
     clause_reviews: list[GeneratedWholeContractClauseReview]
+    contract_findings: list[GeneratedContractFinding]
+    overall_summary: str = Field(min_length=1)
+
+
+class ContractFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    finding_id: str
+    finding_type: ContractFindingType
+    outcome: LegalAssessmentOutcome
+    issue: str
+    reasoning: str
+    citations: list[LegalCitation] = Field(default_factory=list)
+    confidence: AssessmentConfidence
+    supporting_contract_clause_ids: list[str] = Field(default_factory=list)
 
 
 class WholeContractLegalAssessment(BaseModel):
@@ -111,6 +171,8 @@ class WholeContractReviewResult(BaseModel):
     clause_reviews: list[WholeContractClauseReviewResult] = Field(
         default_factory=list
     )
+    contract_findings: list[ContractFinding] = Field(default_factory=list)
+    overall_summary: str | None = None
     summary: ReviewSummary
     unique_legal_sources: list[RetrievedLegalSource] = Field(default_factory=list)
     evidence_mappings: list[ClauseQuerySourceMapping] = Field(default_factory=list)
@@ -128,6 +190,8 @@ class WholeContractReviewPublicResult(BaseModel):
     clause_reviews: list[WholeContractClauseReviewResult] = Field(
         default_factory=list
     )
+    contract_findings: list[ContractFinding] = Field(default_factory=list)
+    overall_summary: str | None = None
     summary: ReviewSummary
     unique_legal_sources: list[RetrievedLegalSource] = Field(default_factory=list)
     evidence_mappings: list[ClauseQuerySourceMapping] = Field(default_factory=list)

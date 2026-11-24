@@ -30,6 +30,7 @@ def whole_review_json(
     clause_ids: list[str],
     *,
     source_id: str = "law:overtime",
+    contract_findings: list[dict[str, object]] | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -46,7 +47,9 @@ def whole_review_json(
                     ],
                 }
                 for index, clause_id in enumerate(clause_ids, start=1)
-            ]
+            ],
+            "contract_findings": contract_findings or [],
+            "overall_summary": "สรุปผลการตรวจสัญญาโดยรวม",
         }
     )
 
@@ -90,6 +93,61 @@ class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.llm_debug.accepted)
         self.assertEqual(result.llm_debug.response.content, raw)
         self.assertEqual(result.llm_debug.response.request_id, "test-request-1")
+
+    async def test_returns_grounded_missing_term_finding(self) -> None:
+        finding = {
+            "finding_id": "finding-01",
+            "finding_type": "missing_term",
+            "outcome": "potential_violation",
+            "issue": "สัญญาขาดข้อกำหนดที่จำเป็น",
+            "reasoning": "กฎหมายกำหนดให้ต้องมีข้อมูลนี้",
+            "citations": [{"source_id": "law:overtime"}],
+            "confidence": "high",
+            "supporting_contract_clause_ids": [],
+        }
+        gateway = FakeGateway(
+            [whole_review_json(["clause-0001"], contract_findings=[finding])]
+        )
+
+        result = await WholeContractReviewService(gateway).review(
+            make_preparation([make_clause_result("clause-0001")])
+        )
+
+        self.assertEqual(result.status, ReviewRunStatus.READY)
+        self.assertEqual(result.overall_summary, "สรุปผลการตรวจสัญญาโดยรวม")
+        self.assertEqual(len(result.contract_findings), 1)
+        self.assertEqual(
+            result.contract_findings[0].citations[0].law_name,
+            "Labor Protection Act",
+        )
+        self.assertEqual(
+            result.contract_findings[0].supporting_contract_clause_ids,
+            [],
+        )
+
+    async def test_rejects_unknown_contract_finding_support(self) -> None:
+        finding = {
+            "finding_id": "finding-01",
+            "finding_type": "cross_clause_conflict",
+            "outcome": "needs_more_evidence",
+            "issue": "ข้อสัญญาขัดแย้งกัน",
+            "reasoning": "ต้องตรวจสอบข้อความทั้งสองส่วน",
+            "citations": [],
+            "confidence": "medium",
+            "supporting_contract_clause_ids": ["clause-invented"],
+        }
+        gateway = FakeGateway(
+            [whole_review_json(["clause-0001"], contract_findings=[finding])]
+        )
+
+        result = await WholeContractReviewService(gateway).review(
+            make_preparation([make_clause_result("clause-0001")])
+        )
+
+        self.assertEqual(
+            result.llm_debug.error_code,
+            "unknown_contract_finding_supporting_clause",
+        )
 
     async def test_missing_clause_rejects_entire_response(self) -> None:
         gateway = FakeGateway([whole_review_json(["clause-0001"])])
@@ -163,7 +221,9 @@ class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
                             }
                         ],
                     }
-                ]
+                ],
+                "contract_findings": [],
+                "overall_summary": "หลักฐานที่มีไม่เพียงพอ",
             }
         )
         gateway = FakeGateway([raw])

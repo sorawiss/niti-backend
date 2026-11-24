@@ -23,6 +23,8 @@ from app.reviews.review_models import (
 )
 from app.reviews.whole_contract_models import (
     ClauseQuerySourceMapping,
+    ContractFinding,
+    GeneratedContractFinding,
     GeneratedWholeContractClauseReview,
     GeneratedWholeContractReview,
     WholeContractClauseReviewResult,
@@ -135,11 +137,17 @@ class WholeContractReviewService:
             )
             for result in preparation.clause_results
         ]
+        contract_findings = self._hydrate_contract_findings(
+            generated.contract_findings,
+            sources_by_id,
+        )
         return WholeContractReviewResult(
             document_id=preparation.document_id,
             filename=preparation.filename,
             status=ReviewRunStatus.READY,
             clause_reviews=clause_reviews,
+            contract_findings=contract_findings,
+            overall_summary=generated.overall_summary,
             summary=self._summary(clause_reviews),
             unique_legal_sources=unique_sources,
             evidence_mappings=evidence_mappings,
@@ -246,7 +254,56 @@ class WholeContractReviewService:
                     not in assessment.supporting_contract_clause_ids
                 ):
                     return "missing_reviewed_clause_support"
+        finding_ids = [
+            finding.finding_id for finding in generated.contract_findings
+        ]
+        if len(finding_ids) != len(set(finding_ids)):
+            return "duplicate_contract_finding_id"
+        for finding in generated.contract_findings:
+            if any(
+                citation.source_id not in valid_source_ids
+                for citation in finding.citations
+            ):
+                return "unknown_contract_finding_citation"
+            if any(
+                clause_id not in valid_clause_ids
+                for clause_id in finding.supporting_contract_clause_ids
+            ):
+                return "unknown_contract_finding_supporting_clause"
         return None
+
+    @staticmethod
+    def _hydrate_contract_findings(
+        generated_findings: list[GeneratedContractFinding],
+        sources_by_id: dict[str, RetrievedLegalSource],
+    ) -> list[ContractFinding]:
+        return [
+            ContractFinding(
+                finding_id=finding.finding_id,
+                finding_type=finding.finding_type,
+                outcome=finding.outcome,
+                issue=finding.issue,
+                reasoning=finding.reasoning,
+                citations=[
+                    LegalCitation(
+                        source_id=source.source_id,
+                        law_name=source.law_name,
+                        section=source.section,
+                        text=source.text,
+                        source_file=source.source_file,
+                    )
+                    for source_id in dict.fromkeys(
+                        citation.source_id for citation in finding.citations
+                    )
+                    for source in [sources_by_id[source_id]]
+                ],
+                confidence=finding.confidence,
+                supporting_contract_clause_ids=list(
+                    dict.fromkeys(finding.supporting_contract_clause_ids)
+                ),
+            )
+            for finding in generated_findings
+        ]
 
     @staticmethod
     def _hydrate_clause_review(
@@ -374,6 +431,15 @@ class WholeContractReviewService:
             "missing_reviewed_clause_support": (
                 "Assessment support does not include its reviewed clause_id"
             ),
+            "duplicate_contract_finding_id": (
+                "Returned contract finding IDs are not unique"
+            ),
+            "unknown_contract_finding_citation": (
+                "Contract finding citation was not present in retrieved evidence"
+            ),
+            "unknown_contract_finding_supporting_clause": (
+                "Contract finding support was not present in the contract"
+            ),
         }.get(error_code, "Whole-contract provenance validation failed")
 
     @staticmethod
@@ -458,7 +524,8 @@ class WholeContractReviewService:
         )
         if (
             not isinstance(payload, dict)
-            or set(payload) != {"clause_reviews"}
+            or set(payload)
+            != {"clause_reviews", "contract_findings", "overall_summary"}
             or not isinstance(raw_reviews, list)
             or not all(isinstance(item, dict) for item in raw_reviews)
         ):
@@ -552,13 +619,107 @@ class WholeContractReviewService:
                 )
             )
 
+        raw_findings = payload["contract_findings"]
+        raw_overall_summary = payload["overall_summary"]
+        contract_findings: list[ContractFinding] = []
+        contract_section_failed = False
+        if not isinstance(raw_findings, list) or not all(
+            isinstance(item, dict) for item in raw_findings
+        ):
+            contract_section_failed = True
+            validation_errors.append(
+                ReviewValidationIssue(
+                    error_type="list_type",
+                    location=["contract_findings"],
+                    message="contract_findings must be a list of objects",
+                )
+            )
+        else:
+            returned_finding_ids = [
+                item.get("finding_id") for item in raw_findings
+            ]
+            if (
+                any(
+                    not isinstance(finding_id, str)
+                    for finding_id in returned_finding_ids
+                )
+                or len(returned_finding_ids) != len(set(returned_finding_ids))
+            ):
+                contract_section_failed = True
+                validation_errors.append(
+                    ReviewValidationIssue(
+                        error_type="duplicate_contract_finding_id",
+                        location=["contract_findings", "provenance"],
+                        message=self._provenance_error_message(
+                            "duplicate_contract_finding_id"
+                        ),
+                    )
+                )
+            else:
+                for index, raw_finding in enumerate(raw_findings):
+                    try:
+                        generated_finding = GeneratedContractFinding.model_validate(
+                            raw_finding
+                        )
+                    except ValidationError as error:
+                        contract_section_failed = True
+                        for issue in self._validation_issues(error):
+                            issue.location = [
+                                "contract_findings",
+                                index,
+                                *issue.location,
+                            ]
+                            validation_errors.append(issue)
+                        continue
+
+                    provenance_error = self._validate_contract_finding_provenance(
+                        generated_finding,
+                        valid_clause_ids,
+                        set(sources_by_id),
+                    )
+                    if provenance_error is not None:
+                        contract_section_failed = True
+                        validation_errors.append(
+                            ReviewValidationIssue(
+                                error_type=provenance_error,
+                                location=[
+                                    "contract_findings",
+                                    index,
+                                    "provenance",
+                                ],
+                                message=self._provenance_error_message(
+                                    provenance_error
+                                ),
+                            )
+                        )
+                        continue
+                    contract_findings.extend(
+                        self._hydrate_contract_findings(
+                            [generated_finding],
+                            sources_by_id,
+                        )
+                    )
+
+        if (
+            not isinstance(raw_overall_summary, str)
+            or not raw_overall_summary.strip()
+        ):
+            contract_section_failed = True
+            validation_errors.append(
+                ReviewValidationIssue(
+                    error_type="string_too_short",
+                    location=["overall_summary"],
+                    message="overall_summary must be a non-empty string",
+                )
+            )
+
         failed_count = sum(
             review.status == ClauseReviewStatus.REVIEW_FAILED
             for review in clause_reviews
         )
         run_status = (
             ReviewRunStatus.FAILED
-            if failed_count == len(clause_reviews)
+            if failed_count == len(clause_reviews) and contract_section_failed
             else ReviewRunStatus.PARTIAL
         )
         return WholeContractReviewResult(
@@ -566,6 +727,10 @@ class WholeContractReviewService:
             filename=preparation.filename,
             status=run_status,
             clause_reviews=clause_reviews,
+            contract_findings=contract_findings,
+            overall_summary=(
+                None if contract_section_failed else raw_overall_summary
+            ),
             summary=self._summary(clause_reviews),
             unique_legal_sources=unique_sources,
             evidence_mappings=evidence_mappings,
@@ -608,6 +773,24 @@ class WholeContractReviewService:
                 not in assessment.supporting_contract_clause_ids
             ):
                 return "missing_reviewed_clause_support"
+        return None
+
+    @staticmethod
+    def _validate_contract_finding_provenance(
+        finding: GeneratedContractFinding,
+        valid_clause_ids: set[str],
+        valid_source_ids: set[str],
+    ) -> str | None:
+        if any(
+            citation.source_id not in valid_source_ids
+            for citation in finding.citations
+        ):
+            return "unknown_contract_finding_citation"
+        if any(
+            clause_id not in valid_clause_ids
+            for clause_id in finding.supporting_contract_clause_ids
+        ):
+            return "unknown_contract_finding_supporting_clause"
         return None
 
     @staticmethod
