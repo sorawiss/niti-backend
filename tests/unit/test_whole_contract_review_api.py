@@ -64,7 +64,7 @@ class WholeContractReviewApiTests(unittest.TestCase):
             QueryRewriteWorkflow.WHOLE_CONTRACT,
         )
         self.assertEqual(payload["status"], "ready")
-        self.assertEqual(payload["contract_findings"], [])
+        self.assertIsNone(payload["contract_findings"])
         self.assertEqual(payload["overall_summary"], "สรุปผลการตรวจสัญญาโดยรวม")
         self.assertEqual(retrieval.top_k, 5)
         self.assertEqual(len(gateway.requests), 1)

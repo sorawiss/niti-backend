@@ -18,13 +18,10 @@ schema, duplicate or missing clause IDs, unknown citation IDs, duplicate
 assessment IDs within a clause, unknown supporting contract clause IDs, or an
 assessment that does not include its own reviewed clause as support.
 
-`contract_findings` is reserved for material issues that cannot honestly be
-assigned to a single clause: a missing term, a conflict between clauses, a
-contract-wide risk, or a drafting issue spanning clauses. Missing terms must
-not claim clause support. Every other finding must identify at least one real
-contract clause. Legal citations are checked against the same retrieved source
-set used for clause reviews. `overall_summary` may summarize accepted clause
-reviews and contract findings but must not introduce a new legal conclusion.
+`contract_findings` is a free-form opinion in Thai, or `null` when there is no
+useful opinion to add. It may use paragraphs or bullets to explain priorities,
+practical concerns, and uncertainty. `overall_summary` is a short recap.
+Clause-level assessments still use structured citations and clause references.
 
 ## Complete LLM response for debugging
 
