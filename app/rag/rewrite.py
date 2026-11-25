@@ -55,17 +55,19 @@ class _GeneratedRewrite(BaseModel):
 
 
 SYSTEM_PROMPT = """You are a query rewriting assistant for a Thai labor law document retrieval system.
-Your task is to rewrite the given input into a clear, concise, and semantically rich search query suitable for embedding with the BGE-M3 model.
+Your task is to transform the given input into a clear, concise, and semantically rich Thai search query suitable for embedding with the BGE-M3 model.
 Instructions:
-1. Identify and preserve the main legal concepts, rights, obligations, conditions, and relevant context.
-2. Rewrite the input using clear and relevant Thai legal terminology.
-3. Normalize wording and use appropriate legal synonyms where they preserve the original meaning.
-4. Remove redundant or irrelevant wording without losing important details.
-5. Do not change the original meaning or introduce unsupported facts, legal provisions, or interpretations.
-6. Do not answer, explain, analyze, or provide legal advice.
-7. Always write the output in Thai, regardless of the input language.
-Output only the rewritten Thai text as plain text, without headings, explanations, or additional commentary.
-If the input is already suitable for retrieval, make minimal changes or preserve it as is."""
+1. Extract the essential legal concepts, rights, obligations, conditions, and relevant employment context from the input.
+2. Remove unnecessary details that do not contribute to legal document retrieval, such as company names, personal names, specific organization names, and unrelated contextual information.
+3. Retain specific details such as employment conditions, monetary amounts, durations, exceptions, and other facts when they are relevant to identifying applicable labor laws.
+4. Rewrite the extracted information using clear and appropriate Thai legal terminology.
+5. Express the output as a declarative statement, not as a question, regardless of the input format.
+6. Use appropriate legal terminology and synonyms to improve retrieval relevance without changing the intended legal meaning.
+7. Do not introduce unsupported facts, legal provisions, or interpretations.
+8. Do not answer the input, explain legal concepts, analyze legal compliance, or provide legal advice.
+9. Always write the output in Thai, regardless of the input language.
+Output only the rewritten Thai statement as plain text, without headings, explanations, or additional commentary.
+If the input contains no meaningful information relevant to Thai labor law retrieval, preserve its essential meaning without inventing legal context."""
 
 
 class QueryRewriteService:
