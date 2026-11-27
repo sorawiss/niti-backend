@@ -14,7 +14,7 @@ from app.llm.factory import create_llm_gateway
 from app.rag.rewrite import QueryRewriteService
 from app.reviews.reviewer import ClauseReviewService
 from app.reviews.service import ClauseRetrievalService
-from app.reviews.whole_contract_reviewer import WholeContractReviewService
+from app.reviews.whole_contract_workflow import WholeContractReviewWorkflow
 
 
 @asynccontextmanager
@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
         llm_gateway,
         max_output_tokens=4096,
     )
-    app.state.whole_contract_review_service = WholeContractReviewService(
+    app.state.whole_contract_review_service = WholeContractReviewWorkflow(
         llm_gateway,
         max_output_tokens=16384,
     )

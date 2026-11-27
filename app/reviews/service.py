@@ -36,6 +36,7 @@ class ClauseRetrievalService:
         document: ParsedDocument,
         *,
         top_k: int = 5,
+        rewrite_queries: bool = True,
         workflow: QueryRewriteWorkflow = QueryRewriteWorkflow.CONTRACT_REVIEW,
     ) -> ClauseRetrievalPreparation:
         clauses = segment_contract(document.blocks)
@@ -49,6 +50,7 @@ class ClauseRetrievalService:
             queries,
             top_k=top_k,
             workflow=workflow,
+            rewrite_queries=rewrite_queries,
         )
 
         counts = {

@@ -16,8 +16,8 @@ from app.documents.parser import parse_docx  # noqa: E402
 from app.llm.factory import create_llm_gateway  # noqa: E402
 from app.reviews.review_models import ReviewRunStatus  # noqa: E402
 from app.reviews.service import ClauseRetrievalService  # noqa: E402
-from app.reviews.whole_contract_reviewer import (  # noqa: E402
-    WholeContractReviewService,
+from app.reviews.whole_contract_workflow import (  # noqa: E402
+    WholeContractReviewWorkflow,
 )
 
 
@@ -57,10 +57,10 @@ async def run(args: argparse.Namespace) -> int:
             max_concurrency=args.retrieval_concurrency,
             max_query_chars=args.max_query_chars,
         ).prepare(document, top_k=args.top_k)
-        review = await WholeContractReviewService(
+        review = await WholeContractReviewWorkflow(
             gateway,
             max_output_tokens=args.max_output_tokens,
-        ).review(preparation)
+        ).review(preparation, debug=True)
     finally:
         await gateway.close()
 
@@ -71,12 +71,17 @@ async def run(args: argparse.Namespace) -> int:
     )
     _write_json(
         output_dir / "review.json",
-        review.model_dump(mode="json", exclude={"llm_debug"}),
+        review.model_dump(mode="json", exclude={"llm_debug", "workflow_debug"}),
     )
     _write_json(
         output_dir / "llm-response.json",
         review.llm_debug.model_dump(mode="json"),
     )
+    _write_json(
+        output_dir / "workflow-debug.json",
+        review.model_dump(mode="json")["workflow_debug"],
+    )
+    print(f"Workflow trace: {output_dir / 'workflow-debug.json'}")
     print(json.dumps(review.summary.model_dump(mode="json"), ensure_ascii=False, indent=2))
     print(f"Complete LLM response: {output_dir / 'llm-response.json'}")
     if review.status == ReviewRunStatus.READY:
@@ -86,7 +91,7 @@ async def run(args: argparse.Namespace) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Review a whole DOCX contract in one LLM request."
+        description="Plan legal evidence searches and review a whole DOCX contract."
     )
     parser.add_argument("input", type=Path)
     parser.add_argument("--output-dir", type=Path)

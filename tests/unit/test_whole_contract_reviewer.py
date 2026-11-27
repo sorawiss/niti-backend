@@ -1,8 +1,11 @@
 import json
 import unittest
 
+from app.llm.errors import LLMInvalidResponseError
 from app.llm.models import LLMResponse, LLMUsage
 from app.reviews.review_models import ClauseReviewStatus, ReviewRunStatus
+from app.reviews.retrieval import ClauseRetriever
+from app.reviews.whole_contract_workflow import WholeContractReviewWorkflow
 from app.reviews.whole_contract_reviewer import WholeContractReviewService
 from tests.unit.test_clause_reviewer import (
     FakeGateway,
@@ -80,9 +83,11 @@ class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         prompt = gateway.requests[0].messages[1].content
         self.assertIn("clause-0001", prompt)
         self.assertIn("clause-0002", prompt)
-        unique_source_section = prompt.split("UNIQUE_LEGAL_SOURCES", 1)[1].split(
-            "EVIDENCE_MAPPINGS", 1
-        )[0]
+        self.assertTrue(all(
+            "EVIDENCE_MAPPINGS" not in message.content
+            for message in gateway.requests[0].messages
+        ))
+        unique_source_section = prompt.split("UNIQUE_LEGAL_SOURCES", 1)[1]
         self.assertEqual(unique_source_section.count("law:overtime"), 1)
         schema = gateway.requests[0].response_format["json_schema"]["schema"]
         assessment_properties = schema["$defs"][
@@ -295,6 +300,62 @@ class WholeContractReviewServiceTests(unittest.IsolatedAsyncioTestCase):
             "openai/gpt-5-mini",
         )
         self.assertNotIn(response.content, captured.output[0])
+
+
+
+class WholeContractReviewWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_or_invalid_plan_reviews_initial_evidence(self) -> None:
+        clause = make_clause_result()
+        preparation = make_preparation([clause])
+
+        def unexpected_retrieval(**kwargs):
+            self.fail("No supplemental search expected")
+
+        for plan, expected_status in [
+            ('{"searches": []}', "no_searches"),
+            ("invalid JSON", "failed"),
+        ]:
+            with self.subTest(plan=plan):
+                gateway = FakeGateway([plan, whole_review_json([clause.clause.clause_id])])
+                workflow = WholeContractReviewWorkflow(
+                    gateway, retriever=ClauseRetriever(unexpected_retrieval), law_catalog=lambda: ()
+                )
+
+                result = await workflow.review(preparation, debug=True)
+
+                self.assertEqual(len(gateway.requests), 2)
+                self.assertEqual(result.status, ReviewRunStatus.READY)
+                self.assertEqual(result.unique_legal_sources, clause.sources)
+                self.assertEqual(result.workflow_debug["context_planning"]["status"], expected_status)
+                self.assertEqual(result.workflow_debug["supplemental_retrieval"], [])
+
+    async def test_failed_planner_preserves_provider_metadata_and_cost(self) -> None:
+        clause = make_clause_result()
+        error = LLMInvalidResponseError(
+            "Unexpected provider response",
+            code="llm_invalid_response",
+            status_code=200,
+            raw_response=json.dumps({
+                "id": "planner-request",
+                "model": "test/planner",
+                "choices": [{"finish_reason": "length", "message": {"content": None}}],
+                "usage": {"cost": 0.002, "total_tokens": 300},
+            }),
+        )
+        gateway = FakeGateway([error, whole_review_json([clause.clause.clause_id])])
+        result = await WholeContractReviewWorkflow(gateway, law_catalog=lambda: ()).review(
+            make_preparation([clause]), debug=True
+        )
+
+        trace = result.model_dump(mode="json")["workflow_debug"]
+        planner = trace["context_planning"]
+        self.assertEqual(planner["http_status"], 200)
+        self.assertEqual(planner["request_id"], "planner-request")
+        self.assertEqual(planner["finish_reason"], "length")
+        self.assertEqual(planner["response_issue"], "missing_or_non_text_content")
+        self.assertEqual(planner["usage"]["cost"], 0.002)
+        self.assertEqual(trace["total_llm_cost"], 0.003)
+        self.assertEqual(result.status, ReviewRunStatus.READY)
 
 
 if __name__ == "__main__":

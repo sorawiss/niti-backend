@@ -1,6 +1,9 @@
-from typing import Annotated
+import json
+import logging
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from pydantic import Field
 
 from app.api.uploads import parse_uploaded_docx
 from app.documents.models import DocumentBlock
@@ -13,6 +16,7 @@ from app.reviews.whole_contract_models import WholeContractReviewPublicResult
 from app.reviews.whole_contract_reviewer import WholeContractReviewService
 
 
+logger = logging.getLogger("uvicorn.error")
 router = APIRouter(prefix="/reviews", tags=["Reviews"])
 
 
@@ -22,6 +26,9 @@ class ContractReviewApiResponse(ContractReviewResult):
 
 class WholeContractReviewApiResponse(WholeContractReviewPublicResult):
     document_blocks: list[DocumentBlock]
+    workflow_debug: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 def get_clause_retrieval_service(request: Request) -> ClauseRetrievalService:
@@ -111,6 +118,7 @@ async def review_whole_contract(
     ],
     retrieval_service: RetrievalServiceDependency,
     review_service: WholeContractReviewServiceDependency,
+    debug: bool = False,
 ) -> WholeContractReviewApiResponse:
     document = await parse_uploaded_docx(file)
     try:
@@ -118,8 +126,17 @@ async def review_whole_contract(
             document,
             top_k=5,
             workflow=QueryRewriteWorkflow.WHOLE_CONTRACT,
+            rewrite_queries=False,
         )
-        review = await review_service.review(preparation)
+        review = await review_service.review(preparation, debug=debug)
+        if debug and review.workflow_debug is not None and logger.isEnabledFor(logging.INFO):
+            trace = review.model_dump(
+                mode="json", include={"document_id", "workflow_debug"}
+            )
+            logger.info(
+                "whole_contract_workflow_debug=%s",
+                json.dumps(trace, ensure_ascii=False, separators=(",", ":")),
+            )
         return WholeContractReviewApiResponse(
             **review.model_dump(mode="python", exclude={"llm_debug"}),
             document_blocks=document.blocks,

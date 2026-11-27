@@ -31,6 +31,7 @@ class ContractClause(BaseModel):
 
 class QueryStrategy(StrEnum):
     CLAUSE_TEXT = "clause_text"
+    SUPPLEMENTAL = "supplemental"
 
 
 class ClauseQuery(BaseModel):

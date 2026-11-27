@@ -52,6 +52,7 @@ class ClauseRetriever:
         queries: list[ClauseQuery],
         *,
         top_k: int = 5,
+        rewrite_queries: bool = True,
         workflow: QueryRewriteWorkflow = QueryRewriteWorkflow.CONTRACT_REVIEW,
     ) -> list[ClauseRetrievalResult]:
         if top_k < 1:
@@ -65,7 +66,7 @@ class ClauseRetriever:
                     query.text,
                     workflow=workflow,
                 )
-                if self._query_rewriter is not None
+                if rewrite_queries and self._query_rewriter is not None
                 else QueryRewriteResult.disabled(query.text)
             )
             async with semaphore:
@@ -101,16 +102,50 @@ class ClauseRetriever:
             for clause in clauses
         ]
 
+    async def retrieve_additional(
+        self,
+        initial: ClauseRetrievalResult,
+        query: ClauseQuery,
+        *,
+        top_k: int,
+        law_name: str | None,
+    ) -> tuple[ClauseRetrievalResult, bool]:
+        rewrite = QueryRewriteResult.disabled(query.text)
+        used_unfiltered_fallback = False
+        try:
+            raw_results = await asyncio.to_thread(
+                self._retriever, query=query.text, top_k=top_k, law_name=law_name
+            )
+            if law_name and not any(
+                self._parse_source(hit, query_id=query.query_id, rank=rank)
+                for rank, hit in enumerate(raw_results, start=1)
+            ):
+                used_unfiltered_fallback = True
+                raw_results = await asyncio.to_thread(
+                    self._retriever, query=query.text, top_k=top_k, law_name=None
+                )
+            outcome = _QueryOutcome(query, rewrite, raw_results=raw_results)
+        except Exception as error:
+            outcome = _QueryOutcome(query, rewrite, error_code=type(error).__name__)
+
+        updated = self._build_clause_result(initial.clause, [outcome], initial=initial)
+        return updated, used_unfiltered_fallback
+
     def _build_clause_result(
         self,
         clause: ContractClause,
         outcomes: list[_QueryOutcome],
+        *,
+        initial: ClauseRetrievalResult | None = None,
     ) -> ClauseRetrievalResult:
         if not outcomes:
             raise ValueError(f"Clause {clause.clause_id} has no retrieval outcome")
 
-        sources_by_id: dict[str, RetrievedLegalSource] = {}
-        query_results: list[QueryRetrievalResult] = []
+        sources_by_id = {
+            source.source_id: source.model_copy(deep=True)
+            for source in (initial.sources if initial else [])
+        }
+        query_results = list(initial.query_results) if initial else []
 
         for outcome in outcomes:
             if outcome.error_code is not None:
@@ -181,7 +216,10 @@ class ClauseRetriever:
         )
         return ClauseRetrievalResult(
             clause=clause,
-            queries=[outcome.query for outcome in outcomes],
+            queries=[
+                *(initial.queries if initial else []),
+                *(outcome.query for outcome in outcomes),
+            ],
             query_results=query_results,
             sources=sources,
             status=status,

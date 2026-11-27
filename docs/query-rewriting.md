@@ -27,7 +27,7 @@ The workflow flags map to these endpoints:
 | `QUERY_REWRITE_RAG_ENABLED` | `POST /rag/retrieve` |
 | `QUERY_REWRITE_CHAT_ENABLED` | `POST /chat` |
 | `QUERY_REWRITE_CONTRACT_REVIEW_ENABLED` | `POST /reviews` |
-| `QUERY_REWRITE_WHOLE_CONTRACT_ENABLED` | `POST /reviews/whole-contract` |
+| `QUERY_REWRITE_WHOLE_CONTRACT_ENABLED` | Direct calls using the whole-contract rewrite workflow. The [whole-contract endpoint](whole-contract-reviewer.md) uses its LangGraph planner for supplemental searches. |
 
 Changing a variable requires restarting the application. Clients cannot
 override these policies with request parameters.

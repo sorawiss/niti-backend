@@ -98,6 +98,18 @@ def get_openrouter_settings() -> OpenRouterSettings:
     )
 
 
+def get_whole_contract_planner_max_output_tokens() -> int:
+    load_dotenv()
+    name = "WHOLE_CONTRACT_PLANNER_MAX_OUTPUT_TOKENS"
+    try:
+        limit = int(os.getenv(name, "8192"))
+    except ValueError as error:
+        raise ValueError(f"{name} must be a positive integer") from error
+    if limit < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return limit
+
+
 @lru_cache(maxsize=1)
 def get_query_rewrite_settings() -> QueryRewriteSettings:
     load_dotenv()

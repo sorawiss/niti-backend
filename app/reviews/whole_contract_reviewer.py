@@ -55,6 +55,8 @@ class WholeContractReviewService:
     async def review(
         self,
         preparation: ClauseRetrievalPreparation,
+        *,
+        debug: bool = False,
     ) -> WholeContractReviewResult:
         unique_sources = self._deduplicate_sources(preparation)
         evidence_mappings = self._build_evidence_mappings(preparation)
@@ -64,7 +66,6 @@ class WholeContractReviewService:
                     messages=build_whole_contract_review_messages(
                         preparation,
                         unique_sources,
-                        evidence_mappings,
                     ),
                     max_output_tokens=self._max_output_tokens,
                     response_format=self._response_format(),

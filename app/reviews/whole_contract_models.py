@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.llm.models import LLMResponse
@@ -119,6 +121,9 @@ class WholeContractReviewResult(BaseModel):
     unique_legal_sources: list[RetrievedLegalSource] = Field(default_factory=list)
     evidence_mappings: list[ClauseQuerySourceMapping] = Field(default_factory=list)
     llm_debug: WholeContractLLMDebug
+    workflow_debug: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class WholeContractReviewPublicResult(BaseModel):
