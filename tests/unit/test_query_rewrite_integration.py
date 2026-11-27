@@ -82,7 +82,7 @@ class QueryRewriteIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.rewrite.effective_query, effective)
         prompt_text = "\n".join(
-            message.content for message in gateway.requests[0].messages
+            message.content for message in gateway.requests[-1].messages
         )
         self.assertIn(original, prompt_text)
         self.assertNotIn(effective, prompt_text)

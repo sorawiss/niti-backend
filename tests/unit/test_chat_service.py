@@ -8,14 +8,20 @@ from app.llm.models import LLMRequest, LLMResponse, LLMUsage
 
 
 class FakeGateway(LLMGateway):
-    def __init__(self, content: str) -> None:
+    def __init__(self, content: str, *, plan_content: str = '{"queries": []}') -> None:
         self.content = content
+        self.plan_content = plan_content
         self.requests: list[LLMRequest] = []
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         self.requests.append(request)
+        schema = (request.response_format or {}).get("json_schema", {})
         return LLMResponse(
-            content=self.content,
+            content=(
+                self.plan_content
+                if schema.get("name") == "legal_chat_search_plan"
+                else self.content
+            ),
             model="test/model",
             provider="test-provider",
             usage=LLMUsage(
@@ -76,9 +82,9 @@ class ChatServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.citations[0].retrieval_rank, 4)
         self.assertEqual(result.citations[0].rerank_rank, 1)
         self.assertEqual(result.usage.total_tokens, 120)
-        self.assertEqual(len(gateway.requests), 1)
+        self.assertEqual(len(gateway.requests), 2)
         self.assertEqual(
-            gateway.requests[0].response_format["type"],
+            gateway.requests[-1].response_format["type"],
             "json_schema",
         )
 
@@ -113,15 +119,89 @@ class ChatServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.requires_human_review)
         self.assertNotIn("คำตอบที่ไม่มีหลักฐาน", result.answer)
 
-    async def test_empty_retrieval_skips_the_language_model(self) -> None:
+    async def test_empty_retrieval_without_followup_evidence_skips_answer_generation(self) -> None:
         gateway = FakeGateway("not used")
         service = ChatService(gateway, retriever=make_retriever([]))
 
         result = await service.answer("คำถาม")
 
         self.assertEqual(result.status, LegalAnswerStatus.INSUFFICIENT_CONTEXT)
-        self.assertEqual(gateway.requests, [])
+        self.assertEqual(len(gateway.requests), 1)
         self.assertIsNone(result.model)
+
+    async def test_search_plan_can_cite_laws_outside_initial_filter(self) -> None:
+        question = "overtime rate"
+        calls: list[tuple[str, int, str | None]] = []
+        initial = {
+            "text": "ชั่วโมงทำงาน",
+            "metadata": {"section": "23", "law_name": "กฎหมายฉบับแรก"},
+        }
+        supplemental = {
+            "text": "อัตราค่าล่วงเวลา",
+            "metadata": {"section": "61", "law_name": "กฎหมายอีกฉบับ"},
+        }
+
+        def retrieve(*, query, top_k, law_name):
+            calls.append((query, top_k, law_name))
+            return [initial, supplemental] if query == "ค่าล่วงเวลา" else [initial]
+
+        gateway = FakeGateway(
+            '{"status":"answered","answer":"คำตอบ","citation_ids":["LAW_2"],'
+            '"requires_human_review":false}',
+            plan_content=json.dumps(
+                {"queries": ["Overtime  RATE", "ค่าล่วงเวลา", "ค่าล่วงเวลา"]}
+            ),
+        )
+        for law_name in ("กฎหมายฉบับแรก", None):
+            with self.subTest(law_name=law_name):
+                calls.clear()
+                gateway.requests.clear()
+                result = await ChatService(gateway, retriever=retrieve).answer(
+                    question, top_k=8, law_name=law_name
+                )
+
+                expected_calls = [(question, 8, law_name)]
+                if law_name:
+                    expected_calls.append(("Overtime  RATE", 5, None))
+                expected_calls.append(("ค่าล่วงเวลา", 5, None))
+                self.assertEqual(calls, expected_calls)
+                self.assertIn(initial["text"], gateway.requests[0].messages[-1].content)
+                self.assertEqual(
+                    [source.law_name for source in result.citations], ["กฎหมายอีกฉบับ"]
+                )
+
+    async def test_search_plan_recovers_from_empty_initial_retrieval_and_failed_search(self) -> None:
+        def retrieve(*, query, **kwargs):
+            if query == "หมดเวลา":
+                raise TimeoutError()
+            if query == "มาตรา 61":
+                return [{"text": "อัตราค่าล่วงเวลา"}]
+            return []
+
+        gateway = FakeGateway(
+            '{"status":"answered","answer":"คำตอบ","citation_ids":["LAW_1"],'
+            '"requires_human_review":false}',
+            plan_content=json.dumps({"queries": ["หมดเวลา", "มาตรา 61"]}),
+        )
+        result = await ChatService(gateway, retriever=retrieve).answer("คำถาม")
+
+        self.assertEqual(result.status, LegalAnswerStatus.ANSWERED)
+        self.assertEqual(result.citations[0].text, "อัตราค่าล่วงเวลา")
+
+    async def test_invalid_search_plan_uses_initial_evidence(self) -> None:
+        gateway = FakeGateway(
+            '{"status":"answered","answer":"คำตอบ","citation_ids":["LAW_1"],'
+            '"requires_human_review":false}',
+            plan_content='{"queries": ["a", "b", "c", "d"]}',
+        )
+        service = ChatService(
+            gateway, retriever=make_retriever([{"text": "ข้อความกฎหมาย"}])
+        )
+
+        result = await service.answer("คำถาม")
+
+        self.assertEqual(result.status, LegalAnswerStatus.ANSWERED)
+        self.assertEqual(len(result.citations), 1)
 
     async def test_invalid_json_raises_generation_error(self) -> None:
         gateway = FakeGateway("not-json")

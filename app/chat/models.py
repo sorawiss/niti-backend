@@ -1,6 +1,7 @@
 from enum import StrEnum
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.llm.models import LLMUsage
 from app.rag.rewrite import QueryRewriteResult
@@ -33,6 +34,20 @@ class GeneratedLegalAnswer(BaseModel):
     answer: str = Field(min_length=1)
     citation_ids: list[str]
     requires_human_review: bool
+
+
+MAX_SUPPLEMENTAL_SEARCHES = 3
+
+
+class ChatSearchPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    queries: list[
+        Annotated[
+            str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)
+        ]
+    ] = Field(max_length=MAX_SUPPLEMENTAL_SEARCHES)
+
 
 class ChatWorkflowResult(BaseModel):
     status: LegalAnswerStatus

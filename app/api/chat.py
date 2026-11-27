@@ -22,11 +22,14 @@ class ChatRequest(BaseModel):
         default=5,
         ge=1,
         le=10,
-        description="Number of law chunks supplied to the language model.",
+        description=(
+            "Number of law chunks to retrieve initially. Supplemental searches use "
+            "up to this limit, capped at 5 per search."
+        ),
     )
     law_name: str | None = Field(
         default=None,
-        description="Optional exact law name metadata filter.",
+        description="Optional exact law name filter for the initial search only.",
     )
 
 

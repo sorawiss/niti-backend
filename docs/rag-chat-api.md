@@ -7,9 +7,10 @@ It is stateless: the backend does not create conversations or store messages.
 
 ```text
 frontend question
-  -> retrieve_laws(question)
-  -> assign LAW_1..LAW_N source IDs
-  -> build a legal-context prompt
+  -> optional query rewrite and initial Qdrant retrieval
+  -> LangGraph planner checks for missing evidence
+  -> run up to three searches across the legal index and merge unique law chunks
+  -> build a legal-context prompt with LAW_1..LAW_N source IDs
   -> OpenRouter structured output
   -> server-side citation validation
   -> answer and retrieved citations
@@ -31,8 +32,11 @@ Content-Type: application/json
 }
 ```
 
-`message` is required. `top_k` accepts 1-10. `law_name` is an optional exact
-metadata filter.
+`message` is required. `top_k` accepts 1-10 for the initial search. Each
+supplemental search retrieves up to `min(top_k, 5)` chunks. The optional
+`law_name` filter applies to the initial search. The planner can rephrase the
+question in Thai legal terminology and search across the full index for
+relevant provisions, including laws beyond the initial results.
 
 ## API response
 
@@ -62,8 +66,12 @@ metadata filter.
 }
 ```
 
-Possible statuses are `answered` and `insufficient_context`. If retrieval finds
-nothing, the workflow skips the paid LLM call.
+Possible statuses are `answered` and `insufficient_context`. The planner can
+propose alternative queries even when the initial search returns no chunks.
+If the planner fails, the workflow proceeds with initial evidence. If an
+individual supplemental search fails, the remaining searches still run. The
+workflow skips final answer generation when no evidence is available after
+searching. `usage` reports the final answer model call.
 
 ## Frontend example
 
