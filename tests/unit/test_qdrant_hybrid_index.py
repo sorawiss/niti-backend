@@ -1,4 +1,6 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from qdrant_client import QdrantClient
 
@@ -8,6 +10,7 @@ from app.rag.qdrant_index import (
     DENSE_VECTOR_SIZE,
     LEGACY_COLLECTION_NAME,
     build_index,
+    list_indexed_law_names,
 )
 
 
@@ -57,6 +60,27 @@ class QdrantHybridIndexTests(unittest.TestCase):
         self.assertIn("dense", points[0].vector)
         self.assertIn("sparse", points[0].vector)
         self.assertFalse(client.collection_exists(LEGACY_COLLECTION_NAME))
+
+
+    def test_law_catalog_reads_every_page_and_preserves_exact_values(self) -> None:
+        with patch("app.rag.qdrant_index.get_qdrant_client") as get_client:
+            client = get_client.return_value
+            client.scroll.side_effect = [
+                ([SimpleNamespace(payload={"law_name": " Act A "})], 123),
+                ([
+                    SimpleNamespace(payload={"law_name": " Act A "}),
+                    SimpleNamespace(payload={"law_name": "Act B"}),
+                    SimpleNamespace(payload={}),
+                ], None),
+            ]
+
+            self.assertEqual(list_indexed_law_names(), (" Act A ", "Act B"))
+            self.assertEqual(
+                [call.kwargs["offset"] for call in client.scroll.call_args_list],
+                [None, 123],
+            )
+            self.assertEqual(client.scroll.call_args.kwargs["with_payload"], ["law_name"])
+            self.assertFalse(client.scroll.call_args.kwargs["with_vectors"])
 
 
 if __name__ == "__main__":

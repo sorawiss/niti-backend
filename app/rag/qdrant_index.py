@@ -34,6 +34,27 @@ def get_qdrant_client() -> QdrantClient:
     return QdrantClient(url=url, api_key=api_key)
 
 
+def list_indexed_law_names() -> tuple[str, ...]:
+    """Read canonical filter values from the active collection."""
+    client = get_qdrant_client()
+    names: set[str] = set()
+    offset = None
+    while True:
+        records, offset = client.scroll(
+            collection_name=COLLECTION_NAME,
+            limit=256,
+            offset=offset,
+            with_payload=["law_name"],
+            with_vectors=False,
+        )
+        for record in records:
+            name = (record.payload or {}).get("law_name")
+            if isinstance(name, str) and name.strip():
+                names.add(name)
+        if offset is None:
+            return tuple(sorted(names))
+
+
 def load_chunks(chunks_dir: Path = DEFAULT_CHUNKS_DIR) -> list[dict[str, Any]]:
     if not chunks_dir.exists():
         raise FileNotFoundError(f"Chunk directory does not exist: {chunks_dir}")
