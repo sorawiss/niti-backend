@@ -186,7 +186,12 @@ class WholeContractReviewWorkflow(WholeContractReviewService):
             error_code = (
                 error.code if isinstance(error, LLMGatewayError) else type(error).__name__
             )
-            logger.warning("Legal evidence planning failed (%s)", error_code)
+            cause = error.__cause__
+            logger.warning(
+                "Legal evidence planning failed (code=%s, exception=%s)",
+                error_code,
+                type(cause if cause is not None else error).__name__,
+            )
             return {
                 "plan": SearchPlan(searches=[]),
                 "law_names": law_names,
